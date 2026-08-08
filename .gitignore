@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE/editor
+.idea/
+.vscode/
+.dbg/
+
+# Data and generated artifacts
+data/*.pkl
+data/*.joblib
+data/*.csv
+data/*.parquet
+data/*.npy
+data/*.npz
+KuaiRand-1K/
+checkpoints/
+runs/
+outputs/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Experiment logs
+*.log
+final_metrics.json
+
+# Private notes
+docs/home_story.md
+
+# OS
+.DS_Store
+Thumbs.db
