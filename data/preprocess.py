@@ -179,9 +179,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     video_features_basic = pd.read_csv(
         input_path / "data" / "video_features_basic_1k.csv"
     )
-    video_features_statistics = pd.read_csv(
-        input_path / "data" / "video_features_statistic_1k.csv"
-    )
 
     select_log_columns = [
         "user_id",
@@ -195,7 +192,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         "is_forward",
         "is_hate",
         "long_view",
-        "is_profile_enter",
         "tab",
     ]
     new_log_df = log_df[select_log_columns]
@@ -210,24 +206,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         "fans_user_num_range",
         "friend_user_num_range",
         "register_days_range",
-        "onehot_feat0",
-        "onehot_feat1",
-        "onehot_feat2",
-        "onehot_feat3",
-        "onehot_feat4",
-        "onehot_feat5",
-        "onehot_feat6",
-        "onehot_feat7",
-        "onehot_feat8",
-        "onehot_feat9",
-        "onehot_feat10",
-        "onehot_feat11",
-        "onehot_feat12",
-        "onehot_feat13",
-        "onehot_feat14",
-        "onehot_feat15",
-        "onehot_feat16",
-        "onehot_feat17",
     ]
     new_user_feature_df = user_features[user_sparse_feature_columns]
 
@@ -252,12 +230,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         if feat_name not in ("user_id"):
             new_user_feature_df[feat_name] = new_user_feature_df[feat_name + "_encode"]
             del new_user_feature_df[feat_name + "_encode"]
-
-    onehot_feat_columns = [x for x in user_sparse_feature_columns if "onehot_" in x]
-    for feat_name in onehot_feat_columns:
-        max_val = new_user_feature_df[feat_name].max()
-        new_user_feature_df[feat_name].fillna(value=max_val + 1, inplace=True)
-        new_user_feature_df[feat_name] = new_user_feature_df[feat_name].astype(np.int32)
 
     print("处理视频基础特征...")
     select_video_basic_feature_columns = [
@@ -310,78 +282,9 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         lambda x: [tag_map_dict[tag] for tag in x.split(",")]
     )
 
-    print("处理视频统计特征...")
-    video_features_statistics_columns = [
-        "video_id",
-        "counts",
-        "show_cnt",
-        "show_user_num",
-        "play_cnt",
-        "play_user_num",
-        "play_duration",
-        "complete_play_cnt",
-        "complete_play_user_num",
-        "valid_play_cnt",
-        "valid_play_user_num",
-        "long_time_play_cnt",
-        "long_time_play_user_num",
-        "short_time_play_cnt",
-        "short_time_play_user_num",
-        "play_progress",
-        "comment_stay_duration",
-        "like_cnt",
-        "like_user_num",
-        "click_like_cnt",
-        "double_click_cnt",
-        "cancel_like_cnt",
-        "cancel_like_user_num",
-        "comment_cnt",
-        "comment_user_num",
-        "direct_comment_cnt",
-        "reply_comment_cnt",
-        "delete_comment_cnt",
-        "delete_comment_user_num",
-        "comment_like_cnt",
-        "comment_like_user_num",
-        "follow_cnt",
-        "follow_user_num",
-        "cancel_follow_cnt",
-        "cancel_follow_user_num",
-        "share_cnt",
-        "share_user_num",
-        "download_cnt",
-        "download_user_num",
-        "report_cnt",
-        "report_user_num",
-        "reduce_similar_cnt",
-        "reduce_similar_user_num",
-        "collect_cnt",
-        "collect_user_num",
-        "cancel_collect_cnt",
-        "cancel_collect_user_num",
-        "direct_comment_user_num",
-        "reply_comment_user_num",
-        "share_all_cnt",
-        "share_all_user_num",
-        "outsite_share_all_cnt",
-    ]
-
-    video_dense_feature_columns = [
-        x for x in video_features_statistics_columns if x not in ("video_id", "counts")
-    ]
-    new_video_features_statistics_df = video_features_statistics[
-        ["video_id"] + video_dense_feature_columns
-    ]
-
-    for feat_name in video_dense_feature_columns:
-        new_video_features_statistics_df[feat_name].fillna(value=0.0, inplace=True)
-
     print("合并特征...")
     df_merged = new_log_df.merge(new_user_feature_df, on="user_id", how="left")
     df_merged = df_merged.merge(new_video_features_basic_df, on="video_id", how="left")
-    df_merged = df_merged.merge(
-        new_video_features_statistics_df, on="video_id", how="left"
-    )
 
     df_merged["user_id"] = df_merged["user_id_encode"]
     df_merged["video_id"] = df_merged["video_id_encode"]
@@ -395,13 +298,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     
     non_datetime_cols = [col for col in df_merged.columns if col not in ("date", "time_ms")]
     df_merged[non_datetime_cols] = df_merged[non_datetime_cols].fillna(value=0)
-
-    for feat_name in tqdm(video_dense_feature_columns):
-        df_merged[feat_name + "_binned"] = pd.qcut(
-            df_merged[feat_name], q=10, labels=False, duplicates="drop"
-        )
-        df_merged[feat_name] = df_merged[feat_name + "_binned"]
-        del df_merged[feat_name + "_binned"]
 
     columns = [x for x in df_merged.columns if x not in ("tag", "date", "time_ms")]
     for feat_name in columns:
@@ -431,9 +327,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     short_seq_array = long_seq_array[:, -SHORT_LEN:]
     short_mask_array = (short_seq_array != 0).astype(np.int8)
     long_mask_array = (long_seq_array != 0).astype(np.int8)
-    print("计算会话id...")
-    df_merged["session_id"] = compute_session_id(df_merged[["user_id", "time_ms"]]).to_numpy()
-
     print("生成特征词典...")
     not_feat_dict_columns = [
         "date",
@@ -445,8 +338,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         "is_forward",
         "is_hate",
         "long_view",
-        "is_profile_enter",
-        "session_id",
         "short_seq",
         "long_seq",
         "short_mask",
@@ -471,9 +362,6 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     df_merged["date"] = df_merged["date"].apply(lambda x: convert_date(x))
     test_mask = df_merged["date"].dt.strftime('%Y%m%d') == '20220508'
     train_mask = ~test_mask
-    test_df = df_merged[test_mask]
-    train_eval_df = df_merged[train_mask]
-
     test_index = np.flatnonzero(test_mask.to_numpy())
     train_index = np.flatnonzero(train_mask.to_numpy())
     split_seq_arrays = {
@@ -491,19 +379,22 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         },
     }
 
-    train_eval_df_no_date = train_eval_df.drop(columns=["date", "time_ms"])
-    test_df_no_date = test_df.drop(columns=["date", "time_ms"])
-
     print("保存训练和测试集（按日期，用于评估）...")
     train_eval_dict = {}
-    for data_type, data_df in zip(["train", "test"], [train_eval_df_no_date, test_df_no_date]):
+    split_indices = {"train": train_index, "test": test_index}
+    save_columns = [
+        col for col in df_merged.columns
+        if col not in ("date", "time_ms", "long_seq")
+    ]
+    for data_type in ("train", "test"):
         train_eval_dict[data_type] = {}
-        for feat_name in data_df.columns:
+        split_index = split_indices[data_type]
+        for feat_name in save_columns:
             if feat_name in ("short_seq", "long_seq"):
                 train_eval_dict[data_type][feat_name] = split_seq_arrays[data_type][feat_name]
             else:
                 train_eval_dict[data_type][feat_name] = np.array(
-                    data_df[feat_name].values, dtype=np.int32
+                    df_merged[feat_name].to_numpy()[split_index], dtype=np.int32
                 )
         train_eval_dict[data_type]["short_seq"] = split_seq_arrays[data_type]["short_seq"]
         train_eval_dict[data_type]["long_seq"] = split_seq_arrays[data_type]["long_seq"]
@@ -520,8 +411,20 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
 
     print("构建用户序列数据（用于召回模型）...")
 
-    def build_user_sequences(df: pd.DataFrame) -> dict:
-        all_users = df["user_id"].unique()
+    def build_user_sequences(data: dict) -> dict:
+        last_index_by_user = {}
+        clicked_by_user = {}
+
+        for idx, (uid, vid, click) in enumerate(
+            zip(data["user_id"], data["video_id"], data["is_click"])
+        ):
+            uid = int(uid)
+            last_index_by_user[uid] = idx
+            if int(click) == 1:
+                clicked_by_user.setdefault(uid, [])
+                if int(vid) not in clicked_by_user[uid]:
+                    clicked_by_user[uid].append(int(vid))
+
         user_ids = []
         short_seqs = []
         long_seqs = []
@@ -531,39 +434,20 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         long_seq_lens = []
         full_sequences = []
 
-        for uid in tqdm(all_users, desc="构建用户序列"):
+        for uid, idx in tqdm(last_index_by_user.items(), desc="构建用户序列"):
             user_ids.append(uid)
+            short_seq = data["short_seq"][idx]
+            long_seq = data["long_seq"][idx]
+            short_mask = data["short_mask"][idx]
+            long_mask = data["long_mask"][idx]
 
-            user_data = df[df["user_id"] == uid]
-            if len(user_data) == 0:
-                short_seqs.append([0] * SHORT_LEN)
-                short_masks.append([0] * SHORT_LEN)
-                short_seq_lens.append(0)
-                long_seqs.append([0] * LONG_LEN)
-                long_masks.append([0] * LONG_LEN)
-                long_seq_lens.append(0)
-                full_sequences.append([])
-                continue
-
-            last_row = user_data.iloc[-1]
-            short_seq = last_row["long_seq"][-SHORT_LEN:]
             short_seqs.append(short_seq)
-            short_mask = [1 if item != 0 else 0 for item in short_seq]
-            long_mask = [1 if item != 0 else 0 for item in last_row["long_seq"]]
+            long_seqs.append(long_seq)
             short_masks.append(short_mask)
-            short_seq_lens.append(sum(short_mask))
-            long_seqs.append(last_row["long_seq"])
             long_masks.append(long_mask)
-            long_seq_lens.append(sum(long_mask))
-            
-            click_data = user_data[user_data["is_click"] == 1].sort_values("date")
-            clicked_videos = []
-            seen = set()
-            for vid in click_data["video_id"].tolist():
-                if vid not in seen:
-                    seen.add(vid)
-                    clicked_videos.append(vid)
-            full_sequences.append(clicked_videos)
+            short_seq_lens.append(int(np.sum(short_mask)))
+            long_seq_lens.append(int(np.sum(long_mask)))
+            full_sequences.append(clicked_by_user.get(uid, []))
 
         short_seqs_np = np.array(short_seqs, dtype=np.int32)
         long_seqs_np = np.array(long_seqs, dtype=np.int32)
@@ -583,7 +467,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
             "music_id_max": final_feature_dict.get("music_id", 20000) - 1,
         }
 
-    user_sequences = build_user_sequences(train_eval_df)
+    user_sequences = build_user_sequences(train_eval_dict["train"])
 
     save_path = output_path / "user_sequences.pkl"
     joblib.dump(user_sequences, save_path, compress=3)
