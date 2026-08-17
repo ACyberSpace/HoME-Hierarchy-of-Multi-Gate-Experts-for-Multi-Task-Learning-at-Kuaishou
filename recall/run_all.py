@@ -33,6 +33,8 @@ def parse_args():
     parser.add_argument("--top_k", type=int, default=100)
     parser.add_argument("--rank_base", type=float, default=0.0)
     parser.add_argument("--min_quota", type=int, default=5)
+    parser.add_argument("--swing_max_user_items", type=int, default=200)
+    parser.add_argument("--swing_max_sim_items", type=int, default=500)
     parser.add_argument("--output_path", type=str, default="checkpoints/recall/all_recall_metrics.json")
     parser.add_argument("--save_candidates", action="store_true")
     parser.add_argument("--candidates_path", type=str, default="checkpoints/recall/all_recall_candidates.pkl")
@@ -54,6 +56,8 @@ def build_base_config(args, feature_dims, model_type):
         "user_feature_dims": {
             "user_id": feature_dims["user_id"],
         },
+        "max_user_items": args.swing_max_user_items,
+        "max_sim_items": args.swing_max_sim_items,
     }
 
 
@@ -127,6 +131,8 @@ def main():
             "lr": args.lr,
             "embedding_dim": args.embedding_dim,
             "top_k": args.top_k,
+            "swing_max_user_items": args.swing_max_user_items,
+            "swing_max_sim_items": args.swing_max_sim_items,
             "fusion": fusion_config,
         },
         "channel_metrics": channel_metrics,
