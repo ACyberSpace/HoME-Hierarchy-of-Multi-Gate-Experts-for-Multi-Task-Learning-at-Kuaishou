@@ -17,7 +17,7 @@ import joblib
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from tqdm import tqdm
 from collections import defaultdict
 import time
@@ -207,6 +207,7 @@ class FullPipeline:
             recall_checkpoints: Dict[str, str],
             rank_checkpoint: str,
             data_config: Optional[DataConfig] = None,
+            recall_fusion_config: Optional[Dict[str, Any]] = None,
             device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         """
@@ -235,6 +236,21 @@ class FullPipeline:
         self.recall_checkpoints = recall_checkpoints
         self.rank_checkpoint = rank_checkpoint
         self.data_config = data_config or DataConfig()
+        self.recall_fusion_config = recall_fusion_config or {}
+        self.last_recall_fusion_metadata = {}
+
+    def _get_recall_channel_name(self, manager) -> str:
+        return str(getattr(manager, "model_type", "unknown")).lower()
+
+    def _get_fusion_weights(self) -> Dict[str, float]:
+        weights = self.recall_fusion_config.get("weights", {})
+        return {str(k).lower(): float(v) for k, v in weights.items()}
+
+    def _get_min_quota(self, channel: str) -> int:
+        quota = self.recall_fusion_config.get("min_quota_per_channel", 0)
+        if isinstance(quota, dict):
+            return int(quota.get(channel, 0))
+        return int(quota)
 
     def load_data(self):
         """加载基础数据"""
@@ -329,21 +345,86 @@ class FullPipeline:
 
     def _fuse_recall_results(
             self,
-            recall_result_list: List[Dict[int, List[int]]],
+            recall_result_list: List[Tuple[str, Dict[int, List[int]]]],
             user_ids: List[int],
             top_k: int = 200,
     ) -> Dict[int, List[int]]:
-        """Fuse multi-channel recall by reciprocal-rank scores."""
+        """Fuse multi-channel recall by explicit weighted reciprocal-rank scores."""
         fused = {}
+        metadata = {}
+        weights = self._get_fusion_weights()
+        rank_base = float(self.recall_fusion_config.get("rank_base", 0.0))
+
         for user_id in user_ids:
             scores = defaultdict(float)
-            for channel_weight, results in enumerate(recall_result_list, start=1):
+            item_meta = {}
+            quota_items = set()
+
+            for channel, results in recall_result_list:
+                channel = str(channel).lower()
+                channel_weight = weights.get(channel, 1.0)
+                user_candidates = results.get(user_id, [])
+                min_quota = self._get_min_quota(channel)
+
+                for quota_item in user_candidates[:min_quota]:
+                    quota_items.add(int(quota_item))
+
                 for rank, item_id in enumerate(results.get(user_id, []), start=1):
-                    scores[int(item_id)] += 1.0 / (channel_weight * rank)
-            fused[user_id] = [
+                    item_id = int(item_id)
+                    contribution = channel_weight / (rank_base + rank)
+                    scores[item_id] += contribution
+
+                    if item_id not in item_meta:
+                        item_meta[item_id] = {
+                            "sources": [],
+                            "hit_count": 0,
+                            "channel_ranks": {},
+                            "channel_scores": {},
+                            "fusion_score": 0.0,
+                            "quota_protected": False,
+                        }
+                    item_meta[item_id]["sources"].append(channel)
+                    item_meta[item_id]["hit_count"] += 1
+                    item_meta[item_id]["channel_ranks"][channel] = rank
+                    item_meta[item_id]["channel_scores"][channel] = contribution
+
+            ranked_items = [
                 item_id for item_id, _ in
-                sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+                sorted(scores.items(), key=lambda x: (-x[1], x[0]))
             ]
+
+            selected = []
+            selected_set = set()
+            for item_id in sorted(quota_items, key=lambda x: (-scores.get(x, 0.0), x)):
+                if item_id in scores and item_id not in selected_set:
+                    selected.append(item_id)
+                    selected_set.add(item_id)
+                if len(selected) >= top_k:
+                    break
+
+            if len(selected) < top_k:
+                for item_id in ranked_items:
+                    if item_id in selected_set:
+                        continue
+                    selected.append(item_id)
+                    selected_set.add(item_id)
+                    if len(selected) >= top_k:
+                        break
+
+            for item_id, meta in item_meta.items():
+                meta["sources"] = sorted(set(meta["sources"]))
+                meta["hit_count"] = len(meta["sources"])
+                meta["fusion_score"] = float(scores[item_id])
+                meta["quota_protected"] = item_id in quota_items
+
+            fused[user_id] = selected
+            metadata[user_id] = {
+                item_id: item_meta[item_id]
+                for item_id in selected
+                if item_id in item_meta
+            }
+
+        self.last_recall_fusion_metadata = metadata
         return fused
 
     def generate_recall_candidates(self, user_ids: List[int], top_k: int = 200) -> Dict[int, List[int]]:
@@ -358,7 +439,7 @@ class FullPipeline:
                 all_item_ids,
                 top_k=top_k,
             )
-            recall_result_list.append(results)
+            recall_result_list.append((self._get_recall_channel_name(manager), results))
 
         return self._fuse_recall_results(recall_result_list, user_ids, top_k=top_k)
 
@@ -621,6 +702,7 @@ def run_full_pipeline(
         rank_checkpoint: str = "",
         recall_model_configs: Optional[Dict] = None,
         data_config: Optional[DataConfig] = None,
+        recall_fusion_config: Optional[Dict[str, Any]] = None,
         device: str = None,
         batch_size: int = 256,
         max_users: Optional[int] = None,
@@ -651,6 +733,7 @@ def run_full_pipeline(
         recall_checkpoints=recall_checkpoints,
         rank_checkpoint=rank_checkpoint,
         data_config=data_config,
+        recall_fusion_config=recall_fusion_config,
         device=device,
     )
 

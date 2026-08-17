@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from .feature_column import FeatureColumn, FEATURE_GROUPS, RECALL_USER_FEATURES, RECALL_ITEM_FEATURES
+from .labels import build_recall_positive_mask, build_user_positive_items
 
 
 class SwingDataLoader:
@@ -15,7 +16,10 @@ class SwingDataLoader:
     def load_data(self):
         user_ids = self.train_data["user_id"]
         video_ids = self.train_data["video_id"]
-        for user_id, video_id in zip(user_ids, video_ids):
+        positive_mask = build_recall_positive_mask(self.train_data)
+        for user_id, video_id, is_positive in zip(user_ids, video_ids, positive_mask):
+            if not is_positive:
+                continue
             if user_id not in self.user_item_dict:
                 self.user_item_dict[user_id] = []
             self.user_item_dict[user_id].append(video_id)
@@ -29,12 +33,29 @@ class SwingDataLoader:
 
 
 class Item2VecDataLoader:
-    def __init__(self, user_sequences: Dict):
+    def __init__(self, user_sequences: Dict, train_data: Dict = None):
         self.user_sequences = user_sequences
+        self.train_data = train_data
         self.sequences = []
 
     def load_data(self):
-        if "full_sequences" in self.user_sequences:
+        if self.train_data is not None:
+            user_positive_items = {}
+            positive_mask = build_recall_positive_mask(self.train_data)
+            for user_id, video_id, is_positive in zip(
+                self.train_data["user_id"],
+                self.train_data["video_id"],
+                positive_mask,
+            ):
+                if not is_positive:
+                    continue
+                user_positive_items.setdefault(int(user_id), [])
+                if int(video_id) not in user_positive_items[int(user_id)]:
+                    user_positive_items[int(user_id)].append(int(video_id))
+            for seq in user_positive_items.values():
+                if len(seq) >= 2:
+                    self.sequences.append([str(x) for x in seq])
+        elif "full_sequences" in self.user_sequences:
             for seq in self.user_sequences["full_sequences"]:
                 if len(seq) >= 2:
                     self.sequences.append([str(x) for x in seq])
@@ -55,7 +76,9 @@ class DSSMDataset(Dataset):
         self.item_feature_dims = item_feature_dims
         self.num_negatives = num_negatives
         self.all_items = np.array(list(set(train_data["video_id"])))
-        self.positive_indices = np.where(train_data["is_click"] == 1)[0]
+        self.positive_mask = build_recall_positive_mask(train_data)
+        self.positive_indices = np.where(self.positive_mask)[0]
+        self.user_positive_items = build_user_positive_items(train_data)
         self.item_index = {}
         for idx, video_id in enumerate(train_data["video_id"]):
             if video_id not in self.item_index:
@@ -65,12 +88,28 @@ class DSSMDataset(Dataset):
     def _pre_sample_negatives(self):
         self.neg_item_ids_list = []
         for idx in self.positive_indices:
+            user_id = int(self.train_data["user_id"][idx])
             pos_item_id = self.train_data["video_id"][idx]
-            neg_item_ids = []
-            while len(neg_item_ids) < self.num_negatives:
-                neg_item_id = int(self.all_items[random.randint(0, len(self.all_items) - 1)])
-                if neg_item_id != pos_item_id and neg_item_id not in neg_item_ids:
-                    neg_item_ids.append(neg_item_id)
+            user_positive_items = self.user_positive_items.get(user_id, set())
+            candidate_items = [
+                int(item_id)
+                for item_id in self.all_items
+                if int(item_id) not in user_positive_items
+            ]
+            if not candidate_items:
+                candidate_items = [
+                    int(item_id)
+                    for item_id in self.all_items
+                    if int(item_id) != int(pos_item_id)
+                ]
+
+            if len(candidate_items) >= self.num_negatives:
+                neg_item_ids = random.sample(candidate_items, self.num_negatives)
+            else:
+                neg_item_ids = [
+                    candidate_items[random.randint(0, len(candidate_items) - 1)]
+                    for _ in range(self.num_negatives)
+                ] if candidate_items else []
             self.neg_item_ids_list.append(neg_item_ids)
 
     def __len__(self):
@@ -114,6 +153,7 @@ class MINDDataset(Dataset):
     def __init__(self, train_data: Dict, item_feature_dims: Dict):
         self.train_data = train_data
         self.item_feature_dims = item_feature_dims
+        self.labels = build_recall_positive_mask(train_data).astype(np.float32)
 
     def __len__(self):
         return len(self.train_data["user_id"])
@@ -134,7 +174,7 @@ class MINDDataset(Dataset):
         return {
             "user_features": user_features,
             "item_features": item_features,
-            "label": self.train_data["is_click"][idx],
+            "label": self.labels[idx],
             "short_seq_len": np.sum(self.train_data["short_mask"][idx]),
         }
 
@@ -143,6 +183,7 @@ class SDMDataset(Dataset):
     def __init__(self, train_data: Dict, item_feature_dims: Dict):
         self.train_data = train_data
         self.item_feature_dims = item_feature_dims
+        self.labels = build_recall_positive_mask(train_data).astype(np.float32)
 
     def __len__(self):
         return len(self.train_data["user_id"])
@@ -165,7 +206,7 @@ class SDMDataset(Dataset):
         return {
             "user_features": user_features,
             "item_features": item_features,
-            "label": self.train_data["is_click"][idx],
+            "label": self.labels[idx],
             "short_seq_len": np.sum(self.train_data["short_mask"][idx]),
             "long_seq_len": np.sum(self.train_data["long_mask"][idx]),
         }

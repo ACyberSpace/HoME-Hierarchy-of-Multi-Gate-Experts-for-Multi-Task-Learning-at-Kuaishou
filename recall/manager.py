@@ -37,7 +37,7 @@ class RecallManager:
             self.models['swing'] = model
 
         elif self.model_type == 'item2vec':
-            data_loader = Item2VecDataLoader(user_sequences)
+            data_loader = Item2VecDataLoader(user_sequences, train_data)
             model = build_item2vec_model(self.config, item_vocab_size=self.item_feature_dims.get("video_id", 1))
             train_model('item2vec', model, data_loader, self.config)
             self.models['item2vec'] = model

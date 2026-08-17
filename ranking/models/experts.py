@@ -30,6 +30,22 @@ from .gates import SelfGate, MultiFeatureGate
 
 # feature_interaction_expert
 class HoMEExpert(nn.Module):
+    """Original HoME expert: Linear + BatchNorm + Swish."""
+
+    def __init__(self, input_dim: int, output_dim: int):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, output_dim)
+        self.bn = nn.BatchNorm1d(output_dim, eps=1e-3)
+        self.swish = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = self.linear(x)
+        output = self.bn(output)
+        output = self.swish(output)
+        return output
+
+
+class GatedCrossExpert(nn.Module):
     """
     Gated Cross Network Expert
 
@@ -282,12 +298,6 @@ class TaskExpertLayer(nn.Module):
                 num_gates=1
             )
 
-        self.click_global_gate = (
-            SelfGate(expert_dim, num_shared_experts)
-            if "is_click" in all_tasks
-            else None
-        )
-
         # ========== Self-Gate (Layer 1 -> Layer 2) ==========
         self.self_gates = nn.ModuleDict({
             task: SelfGate(expert_dim, 1)
@@ -316,12 +326,6 @@ class TaskExpertLayer(nn.Module):
         gloabal_shared_input = self.shared_feature_gates(meta_outputs['shared'])[0]
         for expert in self.shared_experts:
             global_shared_ouputs.append(expert(gloabal_shared_input))
-        global_shared_stack = torch.stack(global_shared_ouputs, dim=1)
-        click_global_output = (
-            self.click_global_gate(gloabal_shared_input, global_shared_stack)
-            if self.click_global_gate is not None
-            else None
-        )
 
         local_shared_ouputs = defaultdict(list)
         for category, tasks in task_groups.items():
@@ -372,12 +376,6 @@ class TaskExpertLayer(nn.Module):
                     dim=1
                 )  # [B, expert_dim]
 
-                if task == "is_click" and click_global_output is not None:
-                    # Click is the prerequisite behavior in the task chain, so its
-                    # tower reads directly from global experts instead of local
-                    # category/task-specific experts.
-                    task_outputs[task] = click_global_output
-                else:
-                    task_outputs[task] = task_output + self_output
+                task_outputs[task] = task_output + self_output
 
         return task_outputs

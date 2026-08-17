@@ -2,33 +2,76 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from recall.data.labels import build_recall_positive_mask
+
 
 def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100]):
     user_ids = test_data["user_id"]
     video_ids = test_data["video_id"]
-    is_click = test_data["is_click"]
+    positive_mask = build_recall_positive_mask(test_data)
 
     user_pos_items = {}
-    for user_id, video_id, click in zip(user_ids, video_ids, is_click):
-        if click == 1:
+    for user_id, video_id, is_positive in zip(user_ids, video_ids, positive_mask):
+        if is_positive:
             if user_id not in user_pos_items:
-                user_pos_items[user_id] = []
-            user_pos_items[user_id].append(video_id)
+                user_pos_items[user_id] = set()
+            user_pos_items[user_id].add(int(video_id))
 
     metrics = {}
     for top_k in top_k_list:
         hit_count = 0
         total_count = 0
+        user_recalls = []
+        covered_items = set()
+
         for user_id in user_pos_items:
             if user_id in recall_results:
-                candidates = recall_results[user_id][:top_k]
+                candidates = [int(x) for x in recall_results[user_id][:top_k]]
                 pos_items = user_pos_items[user_id]
                 hits = len(set(candidates) & set(pos_items))
                 hit_count += hits
                 total_count += len(pos_items)
+                user_recalls.append(hits / len(pos_items) if pos_items else 0.0)
+                covered_items.update(candidates)
+            else:
+                total_count += len(user_pos_items[user_id])
+                user_recalls.append(0.0)
+
         metrics[f"Recall@{top_k}"] = hit_count / total_count if total_count > 0 else 0
+        metrics[f"MicroRecall@{top_k}"] = metrics[f"Recall@{top_k}"]
+        metrics[f"UserAvgRecall@{top_k}"] = float(np.mean(user_recalls)) if user_recalls else 0.0
+        metrics[f"ItemCoverage@{top_k}"] = len(covered_items)
 
     return metrics
+
+
+def evaluate_recall_channels(channel_results, test_data, top_k=100):
+    """Evaluate each recall channel and its overlap against the fused candidates."""
+    channel_metrics = {}
+    for channel, results in channel_results.items():
+        channel_metrics[channel] = evaluate_recall(results, test_data, [top_k])
+    return channel_metrics
+
+
+def compute_channel_overlap(channel_results, top_k=100):
+    """Return pairwise user-averaged overlap rates between recall channels."""
+    channels = list(channel_results.keys())
+    overlap = {}
+
+    for i, left in enumerate(channels):
+        for right in channels[i + 1:]:
+            user_ids = set(channel_results[left]) | set(channel_results[right])
+            rates = []
+            for user_id in user_ids:
+                left_items = set(channel_results[left].get(user_id, [])[:top_k])
+                right_items = set(channel_results[right].get(user_id, [])[:top_k])
+                denom = min(len(left_items), len(right_items))
+                if denom == 0:
+                    continue
+                rates.append(len(left_items & right_items) / denom)
+            overlap[f"{left}__{right}"] = float(np.mean(rates)) if rates else 0.0
+
+    return overlap
 
 
 def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, top_k=100, batch_size=256):

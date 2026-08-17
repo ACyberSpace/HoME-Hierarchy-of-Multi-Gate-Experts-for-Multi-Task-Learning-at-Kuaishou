@@ -22,7 +22,7 @@ class DataConfig:
     
     # 标签列（多任务）
     label_cols: List[str] = field(default_factory=lambda: [
-        'is_click',       # 全局共享任务
+        'is_click',
         'long_view',      # 观看类任务
         'is_like',        # 交互类任务
         'is_comment',     # 交互类任务（稀疏）
@@ -105,8 +105,35 @@ class TrainConfig:
 
 
 @dataclass
+class RecallFusionConfig:
+    """Recall fusion configuration."""
+    channels: List[str] = field(default_factory=lambda: [
+        "swing", "item2vec", "dssm", "mind", "sdm", "freshness"
+    ])
+    weights: Dict[str, float] = field(default_factory=lambda: {
+        "swing": 1.0,
+        "item2vec": 1.0,
+        "dssm": 1.0,
+        "mind": 1.0,
+        "sdm": 1.0,
+        "freshness": 1.0,
+    })
+    rank_base: float = 0.0
+    top_k: int = 100
+    min_quota_per_channel: Dict[str, int] = field(default_factory=lambda: {
+        "swing": 5,
+        "item2vec": 5,
+        "dssm": 5,
+        "mind": 5,
+        "sdm": 5,
+        "freshness": 5,
+    })
+
+
+@dataclass
 class Config:
     """完整配置"""
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    recall_fusion: RecallFusionConfig = field(default_factory=RecallFusionConfig)

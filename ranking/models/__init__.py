@@ -1,7 +1,7 @@
 from .baselines import MMoE, PLE
 from .home import HoME
 from .embedding import FeatureEmbedding
-from .experts import HoMEExpert, MetaExpertLayer, TaskExpertLayer
+from .experts import HoMEExpert, GatedCrossExpert, MetaExpertLayer, TaskExpertLayer
 from .gates import FeatureGate, MultiFeatureGate, SelfGate
 from .loss import HoMEUncertaintyLoss, MultiTaskBCELoss
 
@@ -11,6 +11,7 @@ __all__ = [
     "PLE",
     "FeatureEmbedding",
     "HoMEExpert",
+    "GatedCrossExpert",
     "MetaExpertLayer",
     "TaskExpertLayer",
     "FeatureGate",

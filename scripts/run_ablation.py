@@ -14,8 +14,12 @@ from pathlib import Path
 
 
 EXPERIMENTS = {
-    "home_default": {
-        "description": "Current HoME reproduction with feature gates, self gates, hierarchy mask and uncertainty loss.",
+    "home_bce": {
+        "description": "Original HoME with equal-weight BCE; this is the primary single-variable baseline.",
+        "args": {"--model_name": "home", "--loss_name": "bce"},
+    },
+    "home_adaptive": {
+        "description": "Original HoME with adaptive uncertainty-weighted loss; same structure as home_bce.",
         "args": {"--model_name": "home", "--loss_name": "uncertainty"},
     },
     "mmoe": {
@@ -25,31 +29,6 @@ EXPERIMENTS = {
     "ple": {
         "description": "PyTorch PLE baseline ported from fun-rec CGC and trained on the same KuaiRand features.",
         "args": {"--model_name": "ple", "--loss_name": "bce"},
-    },
-    "home_bce": {
-        "description": "HoME with equal-weight BCE to isolate the gain from uncertainty loss.",
-        "args": {"--model_name": "home", "--loss_name": "bce"},
-    },
-    "small_experts": {
-        "description": "Reduced expert capacity for checking whether gains come from routing design or parameter count.",
-        "args": {
-            "--model_name": "home",
-            "--loss_name": "uncertainty",
-            "--num_meta_shared": "2",
-            "--num_meta_category": "1",
-            "--num_task_shared": "1",
-            "--num_task_in_category": "1",
-            "--num_task_specific": "1",
-            "--expert_dim": "128",
-        },
-    },
-    "more_task_specific": {
-        "description": "More task-specific experts for sparse interaction tasks.",
-        "args": {
-            "--model_name": "home",
-            "--loss_name": "uncertainty",
-            "--num_task_specific": "2",
-        },
     },
 }
 
