@@ -426,17 +426,11 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     )
     df_merged["long_seq"] = df_merged_with_long["last_k_clicked_items"].values
 
-    df_merged["short_seq"] = df_merged["long_seq"].apply(
-        lambda seq: seq[-SHORT_LEN:]
-    )
-
     print("生成序列mask...")
-    df_merged["short_mask"] = df_merged["short_seq"].apply(
-        lambda seq: [1 if item != 0 else 0 for item in seq]
-    )
-    df_merged["long_mask"] = df_merged["long_seq"].apply(
-        lambda seq: [1 if item != 0 else 0 for item in seq]
-    )
+    long_seq_array = np.asarray(df_merged["long_seq"].tolist(), dtype=np.int32)
+    short_seq_array = long_seq_array[:, -SHORT_LEN:]
+    short_mask_array = (short_seq_array != 0).astype(np.int8)
+    long_mask_array = (long_seq_array != 0).astype(np.int8)
     print("计算会话id...")
     df_merged = df_merged.reset_index(drop=True)
     df_merged["session_id"] = compute_session_id(df_merged[["user_id", "time_ms"]])
@@ -476,8 +470,27 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
 
     print("划分训练和测试集（按日期）...")
     df_merged["date"] = df_merged["date"].apply(lambda x: convert_date(x))
-    test_df = df_merged[df_merged["date"].dt.strftime('%Y%m%d') == '20220508']
-    train_eval_df = df_merged[df_merged["date"].dt.strftime('%Y%m%d') != '20220508']
+    test_mask = df_merged["date"].dt.strftime('%Y%m%d') == '20220508'
+    train_mask = ~test_mask
+    test_df = df_merged[test_mask]
+    train_eval_df = df_merged[train_mask]
+
+    test_index = np.flatnonzero(test_mask.to_numpy())
+    train_index = np.flatnonzero(train_mask.to_numpy())
+    split_seq_arrays = {
+        "train": {
+            "short_seq": short_seq_array[train_index],
+            "long_seq": long_seq_array[train_index],
+            "short_mask": short_mask_array[train_index],
+            "long_mask": long_mask_array[train_index],
+        },
+        "test": {
+            "short_seq": short_seq_array[test_index],
+            "long_seq": long_seq_array[test_index],
+            "short_mask": short_mask_array[test_index],
+            "long_mask": long_mask_array[test_index],
+        },
+    }
 
     train_eval_df_no_date = train_eval_df.drop(columns=["date", "time_ms"])
     test_df_no_date = test_df.drop(columns=["date", "time_ms"])
@@ -487,13 +500,16 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     for data_type, data_df in zip(["train", "test"], [train_eval_df_no_date, test_df_no_date]):
         train_eval_dict[data_type] = {}
         for feat_name in data_df.columns:
-            if feat_name in ("short_seq", "long_seq", "short_mask", "long_mask"):
-                seq_data = np.array(data_df[feat_name].tolist(), dtype=np.int32)
-                train_eval_dict[data_type][feat_name] = seq_data
+            if feat_name in ("short_seq", "long_seq"):
+                train_eval_dict[data_type][feat_name] = split_seq_arrays[data_type][feat_name]
             else:
                 train_eval_dict[data_type][feat_name] = np.array(
                     data_df[feat_name].values, dtype=np.int32
                 )
+        train_eval_dict[data_type]["short_seq"] = split_seq_arrays[data_type]["short_seq"]
+        train_eval_dict[data_type]["long_seq"] = split_seq_arrays[data_type]["long_seq"]
+        train_eval_dict[data_type]["short_mask"] = split_seq_arrays[data_type]["short_mask"]
+        train_eval_dict[data_type]["long_mask"] = split_seq_arrays[data_type]["long_mask"]
 
     save_path = output_path / "kuairand_train_eval.pkl"
     if not save_path.parent.exists():
@@ -531,12 +547,15 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
                 continue
 
             last_row = user_data.iloc[-1]
-            short_seqs.append(last_row["short_seq"])
-            short_masks.append(last_row["short_mask"])
-            short_seq_lens.append(sum(last_row["short_mask"]))
+            short_seq = last_row["long_seq"][-SHORT_LEN:]
+            short_seqs.append(short_seq)
+            short_mask = [1 if item != 0 else 0 for item in short_seq]
+            long_mask = [1 if item != 0 else 0 for item in last_row["long_seq"]]
+            short_masks.append(short_mask)
+            short_seq_lens.append(sum(short_mask))
             long_seqs.append(last_row["long_seq"])
-            long_masks.append(last_row["long_mask"])
-            long_seq_lens.append(sum(last_row["long_mask"]))
+            long_masks.append(long_mask)
+            long_seq_lens.append(sum(long_mask))
             
             click_data = user_data[user_data["is_click"] == 1].sort_values("date")
             clicked_videos = []
