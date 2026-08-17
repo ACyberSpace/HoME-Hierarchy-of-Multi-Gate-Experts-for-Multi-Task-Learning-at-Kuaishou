@@ -149,12 +149,12 @@ def compute_session_id(
         return df
 
     df_processed = df.copy()
+    df_processed["_position"] = np.arange(len(df_processed))
     df_processed["time_ms"] = pd.to_numeric(df_processed["time_ms"])
 
     df_processed = df_processed.sort_values(
         by=["user_id", "time_ms"], ascending=True
     )
-    df_processed.reset_index(drop=True, inplace=True)
 
     time_threshold_ms = time_threshold_minutes * 60 * 1000
 
@@ -168,7 +168,7 @@ def compute_session_id(
         df_processed["user_id"].astype(str) + "_" + session_numeric_id.astype(str)
     )
 
-    return session_ids
+    return pd.Series(session_ids.to_numpy(), index=df_processed["_position"]).sort_index()
 
 
 def preprocess(input_path: Path, output_path: Path) -> dict:
@@ -257,7 +257,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     for feat_name in onehot_feat_columns:
         max_val = new_user_feature_df[feat_name].max()
         new_user_feature_df[feat_name].fillna(value=max_val + 1, inplace=True)
-        new_user_feature_df[feat_name] = new_user_feature_df[feat_name].astype(int)
+        new_user_feature_df[feat_name] = new_user_feature_df[feat_name].astype(np.int32)
 
     print("处理视频基础特征...")
     select_video_basic_feature_columns = [
@@ -280,7 +280,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         new_video_features_basic_df[feat_name].fillna(value=max_val + 1, inplace=True)
         new_video_features_basic_df[feat_name] = new_video_features_basic_df[
             feat_name
-        ].astype(int)
+        ].astype(np.int32)
 
     video_sparse_feature_columns = [
         x for x in select_video_basic_feature_columns if x not in ("tag")
@@ -405,7 +405,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
 
     columns = [x for x in df_merged.columns if x not in ("tag", "date", "time_ms")]
     for feat_name in columns:
-        df_merged[feat_name] = df_merged[feat_name].astype(int)
+        df_merged[feat_name] = df_merged[feat_name].astype(np.int32)
 
     main_tab_set = set([1, 0, 4, 2, 6])
     df_merged = df_merged[df_merged["tab"].isin(main_tab_set)]
@@ -432,8 +432,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     short_mask_array = (short_seq_array != 0).astype(np.int8)
     long_mask_array = (long_seq_array != 0).astype(np.int8)
     print("计算会话id...")
-    df_merged = df_merged.reset_index(drop=True)
-    df_merged["session_id"] = compute_session_id(df_merged[["user_id", "time_ms"]])
+    df_merged["session_id"] = compute_session_id(df_merged[["user_id", "time_ms"]]).to_numpy()
 
     print("生成特征词典...")
     not_feat_dict_columns = [
