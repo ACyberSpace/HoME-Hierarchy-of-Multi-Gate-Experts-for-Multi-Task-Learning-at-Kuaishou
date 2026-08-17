@@ -33,8 +33,15 @@ def parse_args():
     parser.add_argument("--top_k", type=int, default=100)
     parser.add_argument("--rank_base", type=float, default=0.0)
     parser.add_argument("--min_quota", type=int, default=5)
-    parser.add_argument("--swing_max_user_items", type=int, default=200)
-    parser.add_argument("--swing_max_sim_items", type=int, default=500)
+    parser.add_argument("--swing_alpha1", type=float, default=5.0)
+    parser.add_argument("--swing_alpha2", type=float, default=1.0)
+    parser.add_argument("--swing_beta", type=float, default=0.3)
+    parser.add_argument("--swing_max_user_items", type=int, default=600)
+    parser.add_argument("--swing_max_user_per_item", type=int, default=700)
+    parser.add_argument("--swing_max_pair_users", type=int, default=200)
+    parser.add_argument("--swing_max_sim_items", type=int, default=200)
+    parser.add_argument("--item2vec_max_user_items", type=int, default=50)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--output_path", type=str, default="checkpoints/recall/all_recall_metrics.json")
     parser.add_argument("--save_candidates", action="store_true")
     parser.add_argument("--candidates_path", type=str, default="checkpoints/recall/all_recall_candidates.pkl")
@@ -56,8 +63,15 @@ def build_base_config(args, feature_dims, model_type):
         "user_feature_dims": {
             "user_id": feature_dims["user_id"],
         },
+        "alpha1": args.swing_alpha1,
+        "alpha2": args.swing_alpha2,
+        "beta": args.swing_beta,
         "max_user_items": args.swing_max_user_items,
+        "max_user_per_item": args.swing_max_user_per_item,
+        "max_pair_users": args.swing_max_pair_users,
         "max_sim_items": args.swing_max_sim_items,
+        "item2vec_max_user_items": args.item2vec_max_user_items,
+        "workers": args.workers,
     }
 
 
@@ -131,8 +145,15 @@ def main():
             "lr": args.lr,
             "embedding_dim": args.embedding_dim,
             "top_k": args.top_k,
+            "workers": args.workers,
+            "swing_alpha1": args.swing_alpha1,
+            "swing_alpha2": args.swing_alpha2,
+            "swing_beta": args.swing_beta,
             "swing_max_user_items": args.swing_max_user_items,
+            "swing_max_user_per_item": args.swing_max_user_per_item,
+            "swing_max_pair_users": args.swing_max_pair_users,
             "swing_max_sim_items": args.swing_max_sim_items,
+            "item2vec_max_user_items": args.item2vec_max_user_items,
             "fusion": fusion_config,
         },
         "channel_metrics": channel_metrics,

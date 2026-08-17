@@ -13,6 +13,7 @@ from .data.recall_data_loaders import (
     Item2VecDataLoader,
     build_dataloader,
 )
+from .data.feature_column import RECALL_ITEM_FEATURES
 from .training.trainer import train_model
 from .evaluation.evaluator import (
     evaluate_recall,
@@ -29,16 +30,32 @@ class RecallManager:
         self.models = {}
         self.item_feature_dims = config.get("item_feature_dims", {})
         self.user_feature_dims = config.get("user_feature_dims", {})
+        self.item_feature_index = None
+
+    def _build_item_feature_index(self, train_data: dict):
+        item_feature_index = {}
+        for idx, video_id in enumerate(train_data["video_id"]):
+            video_id = int(video_id)
+            if video_id in item_feature_index:
+                continue
+            item_feature_index[video_id] = {
+                feat_name: int(train_data[feat_name][idx])
+                for feat_name in RECALL_ITEM_FEATURES
+                if feat_name in train_data
+            }
+        return item_feature_index
 
     def train(self, train_data: dict, user_sequences: dict, video_info=None):
+        self.item_feature_index = self._build_item_feature_index(train_data)
+
         if self.model_type == 'swing':
-            data_loader = SwingDataLoader(train_data)
+            data_loader = SwingDataLoader(train_data, user_sequences)
             model = build_swing_model(self.config, item_vocab_size=self.item_feature_dims.get("video_id", 1))
             train_model('swing', model, data_loader, self.config)
             self.models['swing'] = model
 
         elif self.model_type == 'item2vec':
-            data_loader = Item2VecDataLoader(user_sequences, train_data)
+            data_loader = Item2VecDataLoader(user_sequences)
             model = build_item2vec_model(self.config, item_vocab_size=self.item_feature_dims.get("video_id", 1))
             train_model('item2vec', model, data_loader, self.config)
             self.models['item2vec'] = model
@@ -90,17 +107,17 @@ class RecallManager:
 
         elif 'dssm' in self.models:
             recall_results = generate_recall_candidates_dssm(
-                self.models['dssm'], user_sequences, all_item_ids, top_k
+                self.models['dssm'], user_sequences, all_item_ids, self.item_feature_index, top_k
             )
 
         elif 'mind' in self.models:
             recall_results = generate_recall_candidates_mind(
-                self.models['mind'], user_sequences, all_item_ids, top_k
+                self.models['mind'], user_sequences, all_item_ids, self.item_feature_index, top_k
             )
 
         elif 'sdm' in self.models:
             recall_results = generate_recall_candidates_sdm(
-                self.models['sdm'], user_sequences, all_item_ids, top_k
+                self.models['sdm'], user_sequences, all_item_ids, self.item_feature_index, top_k
             )
 
         elif 'freshness' in self.models:

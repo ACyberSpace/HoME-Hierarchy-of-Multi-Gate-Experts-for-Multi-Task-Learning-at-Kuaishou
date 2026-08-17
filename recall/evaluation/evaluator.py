@@ -3,6 +3,7 @@ import torch
 from tqdm import tqdm
 
 from recall.data.labels import build_recall_positive_mask
+from recall.data.feature_column import RECALL_ITEM_FEATURES
 
 
 def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100]):
@@ -23,10 +24,12 @@ def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100]):
         total_count = 0
         user_recalls = []
         covered_items = set()
+        candidate_counts = []
 
         for user_id in user_pos_items:
             if user_id in recall_results:
                 candidates = [int(x) for x in recall_results[user_id][:top_k]]
+                candidate_counts.append(len(candidates))
                 pos_items = user_pos_items[user_id]
                 hits = len(set(candidates) & set(pos_items))
                 hit_count += hits
@@ -36,11 +39,17 @@ def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100]):
             else:
                 total_count += len(user_pos_items[user_id])
                 user_recalls.append(0.0)
+                candidate_counts.append(0)
 
         metrics[f"Recall@{top_k}"] = hit_count / total_count if total_count > 0 else 0
         metrics[f"MicroRecall@{top_k}"] = metrics[f"Recall@{top_k}"]
         metrics[f"UserAvgRecall@{top_k}"] = float(np.mean(user_recalls)) if user_recalls else 0.0
         metrics[f"ItemCoverage@{top_k}"] = len(covered_items)
+        metrics[f"AvgCandidates@{top_k}"] = float(np.mean(candidate_counts)) if candidate_counts else 0.0
+        metrics[f"FullCandidateRate@{top_k}"] = (
+            float(np.mean([count >= top_k for count in candidate_counts]))
+            if candidate_counts else 0.0
+        )
 
     return metrics
 
@@ -74,7 +83,24 @@ def compute_channel_overlap(channel_results, top_k=100):
     return overlap
 
 
-def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, top_k=100, batch_size=256):
+def _build_item_feature_tensors(all_item_ids, item_feature_index, device):
+    features = {"video_id": torch.tensor(all_item_ids, dtype=torch.long).to(device)}
+    if not item_feature_index:
+        return features
+
+    for feat_name in RECALL_ITEM_FEATURES:
+        if feat_name == "video_id":
+            continue
+        values = [
+            int(item_feature_index.get(int(item_id), {}).get(feat_name, 0))
+            for item_id in all_item_ids
+        ]
+        features[feat_name] = torch.tensor(values, dtype=torch.long).to(device)
+
+    return features
+
+
+def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, item_feature_index=None, top_k=100, batch_size=256):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -82,7 +108,9 @@ def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, top_k=1
     recall_results = {}
     user_ids = user_sequences["user_id"]
 
-    all_item_ids_tensor = torch.tensor(all_item_ids, dtype=torch.long).to(device)
+    item_features = _build_item_feature_tensors(all_item_ids, item_feature_index, device)
+    with torch.no_grad():
+        item_repr = model.get_item_repr(item_features)
 
     for i in tqdm(range(0, len(user_ids), batch_size), desc="生成召回候选"):
         batch_user_ids = user_ids[i:i+batch_size]
@@ -90,15 +118,15 @@ def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, top_k=1
         batch_short_mask = user_sequences["short_mask"][i:i+batch_size]
 
         user_features = {
+            "user_id": torch.tensor(batch_user_ids, dtype=torch.long).to(device),
             "short_seq": torch.tensor(batch_short_seq, dtype=torch.long).to(device),
             "short_mask": torch.tensor(batch_short_mask, dtype=torch.long).to(device),
         }
 
-        user_repr = model.get_user_repr(user_features)
-        item_repr = model.get_item_repr({"video_id": all_item_ids_tensor})
-
-        scores = torch.matmul(user_repr, item_repr.T)
-        top_indices = torch.topk(scores, top_k, dim=1)[1]
+        with torch.no_grad():
+            user_repr = model.get_user_repr(user_features)
+            scores = torch.matmul(user_repr, item_repr.T)
+            top_indices = torch.topk(scores, top_k, dim=1)[1]
 
         for j, user_id in enumerate(batch_user_ids):
             candidates = [all_item_ids[idx.item()] for idx in top_indices[j]]
@@ -107,7 +135,7 @@ def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, top_k=1
     return recall_results
 
 
-def generate_recall_candidates_mind(model, user_sequences, all_item_ids, top_k=100, batch_size=256):
+def generate_recall_candidates_mind(model, user_sequences, all_item_ids, item_feature_index=None, top_k=100, batch_size=256):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -115,7 +143,9 @@ def generate_recall_candidates_mind(model, user_sequences, all_item_ids, top_k=1
     recall_results = {}
     user_ids = user_sequences["user_id"]
 
-    all_item_ids_tensor = torch.tensor(all_item_ids, dtype=torch.long).to(device)
+    item_features = _build_item_feature_tensors(all_item_ids, item_feature_index, device)
+    with torch.no_grad():
+        item_repr = model.get_item_repr(item_features)
 
     for i in tqdm(range(0, len(user_ids), batch_size), desc="生成召回候选"):
         batch_user_ids = user_ids[i:i+batch_size]
@@ -123,16 +153,16 @@ def generate_recall_candidates_mind(model, user_sequences, all_item_ids, top_k=1
         batch_short_mask = user_sequences["short_mask"][i:i+batch_size]
 
         user_features = {
+            "user_id": torch.tensor(batch_user_ids, dtype=torch.long).to(device),
             "short_seq": torch.tensor(batch_short_seq, dtype=torch.long).to(device),
             "short_mask": torch.tensor(batch_short_mask, dtype=torch.long).to(device),
         }
 
-        interest_embeddings = model.get_user_interests(user_features)
-        item_embedding = model.item_embedding(all_item_ids_tensor)
-
-        scores = torch.matmul(interest_embeddings, item_embedding.T)
-        max_scores, _ = torch.max(scores, dim=1)
-        top_indices = torch.topk(max_scores, top_k, dim=1)[1]
+        with torch.no_grad():
+            interest_embeddings = model.get_user_interests(user_features)
+            scores = torch.matmul(interest_embeddings, item_repr.T)
+            max_scores, _ = torch.max(scores, dim=1)
+            top_indices = torch.topk(max_scores, top_k, dim=1)[1]
 
         for j, user_id in enumerate(batch_user_ids):
             candidates = [all_item_ids[idx.item()] for idx in top_indices[j]]
@@ -141,7 +171,7 @@ def generate_recall_candidates_mind(model, user_sequences, all_item_ids, top_k=1
     return recall_results
 
 
-def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, top_k=100, batch_size=256):
+def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, item_feature_index=None, top_k=100, batch_size=256):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -149,7 +179,9 @@ def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, top_k=10
     recall_results = {}
     user_ids = user_sequences["user_id"]
 
-    all_item_ids_tensor = torch.tensor(all_item_ids, dtype=torch.long).to(device)
+    item_features = _build_item_feature_tensors(all_item_ids, item_feature_index, device)
+    with torch.no_grad():
+        item_repr = model.get_item_repr(item_features)
 
     for i in tqdm(range(0, len(user_ids), batch_size), desc="生成召回候选"):
         batch_user_ids = user_ids[i:i+batch_size]
@@ -159,17 +191,17 @@ def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, top_k=10
         batch_long_mask = user_sequences["long_mask"][i:i+batch_size]
 
         user_features = {
+            "user_id": torch.tensor(batch_user_ids, dtype=torch.long).to(device),
             "short_seq": torch.tensor(batch_short_seq, dtype=torch.long).to(device),
             "short_mask": torch.tensor(batch_short_mask, dtype=torch.long).to(device),
             "long_seq": torch.tensor(batch_long_seq, dtype=torch.long).to(device),
             "long_mask": torch.tensor(batch_long_mask, dtype=torch.long).to(device),
         }
 
-        user_repr = model.get_user_repr(user_features)
-        item_embedding = model.item_embedding(all_item_ids_tensor)
-
-        scores = torch.matmul(user_repr, item_embedding.T)
-        top_indices = torch.topk(scores, top_k, dim=1)[1]
+        with torch.no_grad():
+            user_repr = model.get_user_repr(user_features)
+            scores = torch.matmul(user_repr, item_repr.T)
+            top_indices = torch.topk(scores, top_k, dim=1)[1]
 
         for j, user_id in enumerate(batch_user_ids):
             candidates = [all_item_ids[idx.item()] for idx in top_indices[j]]

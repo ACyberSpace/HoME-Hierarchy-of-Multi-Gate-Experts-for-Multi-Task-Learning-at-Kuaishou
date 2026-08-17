@@ -1,4 +1,5 @@
 import pickle
+import argparse
 from datetime import datetime
 from pathlib import Path
 
@@ -179,6 +180,9 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     video_features_basic = pd.read_csv(
         input_path / "data" / "video_features_basic_1k.csv"
     )
+    video_upload_info = None
+    if "upload_dt" in video_features_basic.columns:
+        video_upload_info = video_features_basic[["video_id", "upload_dt"]].copy()
 
     select_log_columns = [
         "user_id",
@@ -477,6 +481,12 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     video_info = new_video_features_basic_df.copy()
     video_info["video_id"] = video_info["video_id_encode"]
     del video_info["video_id_encode"]
+    if video_upload_info is not None:
+        video_id_mapping = new_video_features_basic_df[["video_id", "video_id_encode"]]
+        upload_info = video_upload_info.merge(video_id_mapping, on="video_id", how="inner")
+        upload_info["video_id"] = upload_info["video_id_encode"]
+        upload_info = upload_info[["video_id", "upload_dt"]]
+        video_info = video_info.merge(upload_info, on="video_id", how="left")
 
     def parse_upload_dt(upload_dt):
         if pd.isna(upload_dt):
@@ -508,6 +518,9 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
 
 
 if __name__ == '__main__':
-    input_path = Path("../KuaiRand-1K")
-    save_path = Path("../KuaiRand-1K")
-    preprocess(input_path, save_path)
+    parser = argparse.ArgumentParser(description="Preprocess KuaiRand-1K for HoME.")
+    parser.add_argument("--input_path", type=str, default="../KuaiRand-1K")
+    parser.add_argument("--output_path", type=str, default="./data")
+    args = parser.parse_args()
+
+    preprocess(Path(args.input_path), Path(args.output_path))

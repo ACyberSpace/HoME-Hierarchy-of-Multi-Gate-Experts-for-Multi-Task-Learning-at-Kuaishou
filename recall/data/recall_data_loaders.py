@@ -9,11 +9,22 @@ from .labels import build_recall_positive_mask, build_user_positive_items
 
 
 class SwingDataLoader:
-    def __init__(self, train_data: Dict):
+    def __init__(self, train_data: Dict, user_sequences: Dict = None):
         self.train_data = train_data
+        self.user_sequences = user_sequences
         self.user_item_dict = {}
 
     def load_data(self):
+        if self.user_sequences is not None and "full_sequences" in self.user_sequences:
+            for user_id, seq in zip(
+                self.user_sequences["user_id"],
+                self.user_sequences["full_sequences"],
+            ):
+                clean_seq = [int(item_id) for item_id in seq if int(item_id) != 0]
+                if clean_seq:
+                    self.user_item_dict[int(user_id)] = clean_seq
+            return
+
         user_ids = self.train_data["user_id"]
         video_ids = self.train_data["video_id"]
         positive_mask = build_recall_positive_mask(self.train_data)
@@ -50,8 +61,7 @@ class Item2VecDataLoader:
                 if not is_positive:
                     continue
                 user_positive_items.setdefault(int(user_id), [])
-                if int(video_id) not in user_positive_items[int(user_id)]:
-                    user_positive_items[int(user_id)].append(int(video_id))
+                user_positive_items[int(user_id)].append(int(video_id))
             for seq in user_positive_items.values():
                 if len(seq) >= 2:
                     self.sequences.append([str(x) for x in seq])

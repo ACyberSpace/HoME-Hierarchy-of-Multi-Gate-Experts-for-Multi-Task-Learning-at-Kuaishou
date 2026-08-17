@@ -75,6 +75,14 @@ class MIND(nn.Module):
 
         return interest_embeddings
 
+    def get_item_repr(self, item_features):
+        item_embeds = []
+        for feat_name in self.item_feature_dims:
+            if feat_name in item_features:
+                item_embeds.append(self.item_embeddings[feat_name](item_features[feat_name]))
+        item_embeds = torch.cat(item_embeds, dim=1)
+        return self.item_tower(item_embeds)
+
 
 def build_mind_model(config: dict, user_feature_dims: dict, item_feature_dims: dict):
     model = MIND(
