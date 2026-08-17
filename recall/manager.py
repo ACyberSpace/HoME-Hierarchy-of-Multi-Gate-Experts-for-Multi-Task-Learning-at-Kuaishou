@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from .models.swing import build_swing_model
 from .models.item2vec import build_item2vec_model
@@ -71,7 +72,8 @@ class RecallManager:
 
         if 'swing' in self.models:
             model = self.models['swing']
-            for i, user_id in enumerate(user_sequences['user_id']):
+            iterator = tqdm(user_sequences['user_id'], desc="生成 swing 召回候选")
+            for i, user_id in enumerate(iterator):
                 user_hist_items = user_sequences['long_seq'][i]
                 user_hist_items = user_hist_items[user_hist_items != 0].tolist()
                 candidates = model.generate_recall_candidates(user_id, user_hist_items, all_item_ids, top_k)
@@ -79,7 +81,8 @@ class RecallManager:
 
         elif 'item2vec' in self.models:
             model = self.models['item2vec']
-            for i, user_id in enumerate(user_sequences['user_id']):
+            iterator = tqdm(user_sequences['user_id'], desc="生成 item2vec 召回候选")
+            for i, user_id in enumerate(iterator):
                 user_hist_items = user_sequences['long_seq'][i]
                 user_hist_items = user_hist_items[user_hist_items != 0].tolist()
                 candidates = model.generate_recall_candidates(user_id, user_hist_items, all_item_ids, top_k)
@@ -102,7 +105,8 @@ class RecallManager:
 
         elif 'freshness' in self.models:
             model = self.models['freshness']
-            for i, user_id in enumerate(user_sequences['user_id']):
+            iterator = tqdm(user_sequences['user_id'], desc="生成 freshness 召回候选")
+            for i, user_id in enumerate(iterator):
                 user_hist_items = user_sequences['long_seq'][i]
                 user_hist_items = user_hist_items[user_hist_items != 0].tolist()
                 candidates = model.generate_recall_candidates(user_id, user_hist_items, all_item_ids, top_k)

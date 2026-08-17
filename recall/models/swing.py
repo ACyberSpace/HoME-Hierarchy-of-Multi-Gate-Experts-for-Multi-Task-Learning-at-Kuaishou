@@ -2,6 +2,7 @@ import numpy as np
 from collections import defaultdict
 from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
+from tqdm import tqdm
 
 
 class Swing:
@@ -42,7 +43,7 @@ class Swing:
         user_degree = np.array(user_item_matrix.sum(axis=1)).flatten()
         user_weight = 1 / (self.alpha + user_degree)
 
-        for i in range(len(unique_items)):
+        for i in tqdm(range(len(unique_items)), desc="计算 Swing 物品相似度"):
             for j in range(len(unique_items)):
                 if i != j:
                     users_i = user_item_matrix[:, i].nonzero()[0]

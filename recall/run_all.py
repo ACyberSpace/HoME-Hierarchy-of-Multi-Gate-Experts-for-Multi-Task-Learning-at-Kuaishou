@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import joblib
+from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -75,7 +76,7 @@ def main():
     channel_metrics = {}
     channel_times = {}
 
-    for channel in args.channels:
+    for channel in tqdm(args.channels, desc="六路召回总进度"):
         channel_start = time.time()
         print("=" * 80)
         print(f"训练并评估召回通道: {channel}")
