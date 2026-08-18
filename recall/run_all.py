@@ -94,6 +94,20 @@ def get_channel_cache_path(cache_dir, channel, top_k):
     return Path(cache_dir) / f"{channel}_top{top_k}_candidates.pkl"
 
 
+def build_data_signature(data_dir, train_data, test_data):
+    metadata_path = Path(data_dir) / "preprocess_metadata.json"
+    metadata = {}
+    if metadata_path.exists():
+        with metadata_path.open("r", encoding="utf-8") as f:
+            metadata = json.load(f)
+    return {
+        "train_rows": int(len(train_data["user_id"])),
+        "test_rows": int(len(test_data["user_id"])),
+        "train_items": int(len(set(int(item_id) for item_id in train_data["video_id"]))),
+        "metadata": metadata,
+    }
+
+
 def build_base_config(args, feature_dims, model_type):
     item_feature_names = [
         "video_id",
@@ -161,6 +175,7 @@ def run_or_load_channel(
     video_info,
     all_item_ids,
     cache_dir,
+    data_signature,
 ):
     cache_path = get_channel_cache_path(cache_dir, channel, args.top_k)
     channel_start = time.time()
@@ -170,10 +185,18 @@ def run_or_load_channel(
     print("=" * 80)
 
     if cache_path.exists() and not args.force_recall:
-        print(f"[{channel}] cache found, skip training and generation: {cache_path}")
         cached = joblib.load(cache_path)
-        results = cached["results"] if isinstance(cached, dict) and "results" in cached else cached
+        cache_signature = cached.get("data_signature") if isinstance(cached, dict) else None
+        if cache_signature == data_signature:
+            print(f"[{channel}] cache found, skip training and generation: {cache_path}")
+            results = cached["results"] if isinstance(cached, dict) and "results" in cached else cached
+        else:
+            print(f"[{channel}] cache exists but data signature changed, rerun: {cache_path}")
+            cached = None
     else:
+        cached = None
+
+    if cached is None:
         config = build_base_config(args, feature_dims, channel)
         manager = RecallManager(config)
         manager.train(train_data, user_sequences, video_info)
@@ -184,6 +207,7 @@ def run_or_load_channel(
                 "top_k": args.top_k,
                 "results": results,
                 "config": config,
+                "data_signature": data_signature,
             },
             cache_path,
             compress=3,
@@ -214,6 +238,7 @@ def main():
     train_data = train_eval_dict["train"]
     test_data = train_eval_dict["test"]
     all_item_ids = list(set(train_data["video_id"]))
+    data_signature = build_data_signature(data_dir, train_data, test_data)
     test_pool_overlap = compute_test_pool_overlap(all_item_ids, test_data)
 
     print("Test positives vs train candidate pool overlap:")
@@ -237,6 +262,7 @@ def main():
             video_info,
             all_item_ids,
             channel_cache_dir,
+            data_signature,
         )
         channel_results[channel] = results
         channel_metrics[channel] = metrics
