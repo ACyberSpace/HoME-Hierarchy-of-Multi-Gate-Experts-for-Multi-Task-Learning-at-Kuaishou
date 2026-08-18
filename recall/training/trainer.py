@@ -9,6 +9,7 @@ from recall.models.item2vec import Item2Vec
 from recall.models.dssm import DSSM
 from recall.models.mind import MIND
 from recall.models.sdm import SDM
+from recall.models.youtubednn import YouTubeDNN
 
 
 def train_swing(model, data_loader):
@@ -54,6 +55,10 @@ def train_dssm(model, dataloader, epochs=5, lr=0.001, temperature=0.05):
             total_loss += loss.item()
 
         print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}")
+
+
+def train_youtubednn(model, dataloader, epochs=5, lr=0.001, temperature=0.05):
+    train_dssm(model, dataloader, epochs=epochs, lr=lr, temperature=temperature)
 
 
 def train_mind(model, dataloader, epochs=5, lr=0.001):
@@ -110,6 +115,14 @@ def train_model(model_type: str, model, data_loader, config: dict):
         train_item2vec(model, data_loader)
     elif model_type == 'dssm':
         train_dssm(
+            model,
+            data_loader,
+            epochs=config.get("epochs", 5),
+            lr=config.get("lr", 0.001),
+            temperature=config.get("softmax_temperature", 0.05),
+        )
+    elif model_type == 'youtubednn':
+        train_youtubednn(
             model,
             data_loader,
             epochs=config.get("epochs", 5),

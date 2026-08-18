@@ -25,6 +25,7 @@ data/*.csv
 data/*.parquet
 data/*.npy
 data/*.npz
+data/preprocess_metadata.json
 KuaiRand-1K/
 checkpoints/
 runs/

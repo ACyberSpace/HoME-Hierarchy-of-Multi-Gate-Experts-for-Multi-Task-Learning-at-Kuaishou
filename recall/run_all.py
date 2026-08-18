@@ -20,9 +20,31 @@ from recall.evaluation.evaluator import (
 from recall.manager import RecallManager
 
 
-ALL_CHANNELS = ["dssm", "sdm", "popularity", "freshness", "item2vec", "swing", "mind"]
-CHANNEL_RUN_ORDER = ["popularity", "freshness", "dssm", "sdm", "item2vec", "swing", "mind"]
-DEFAULT_CHANNELS = ["popularity", "freshness", "dssm", "sdm"]
+ALL_CHANNELS = [
+    "hotfresh",
+    "eges",
+    "youtubednn",
+    "sdm",
+    "dssm",
+    "popularity",
+    "freshness",
+    "item2vec",
+    "swing",
+    "mind",
+]
+CHANNEL_RUN_ORDER = [
+    "hotfresh",
+    "eges",
+    "youtubednn",
+    "sdm",
+    "dssm",
+    "popularity",
+    "freshness",
+    "item2vec",
+    "swing",
+    "mind",
+]
+DEFAULT_CHANNELS = ["hotfresh", "eges", "youtubednn", "sdm"]
 
 
 def parse_args():
@@ -46,6 +68,10 @@ def parse_args():
     parser.add_argument("--swing_max_pair_users", type=int, default=200)
     parser.add_argument("--swing_max_sim_items", type=int, default=200)
     parser.add_argument("--item2vec_max_user_items", type=int, default=50)
+    parser.add_argument("--eges_window", type=int, default=5)
+    parser.add_argument("--eges_max_user_items", type=int, default=50)
+    parser.add_argument("--eges_min_count", type=int, default=1)
+    parser.add_argument("--hotfresh_half_life_days", type=float, default=3.0)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--candidate_batch_size", type=int, default=32)
     parser.add_argument("--item_batch_size", type=int, default=50000)
@@ -115,6 +141,10 @@ def build_base_config(args, feature_dims, model_type):
         "max_pair_users": args.swing_max_pair_users,
         "max_sim_items": args.swing_max_sim_items,
         "item2vec_max_user_items": args.item2vec_max_user_items,
+        "eges_window": args.eges_window,
+        "eges_max_user_items": args.eges_max_user_items,
+        "eges_min_count": args.eges_min_count,
+        "hotfresh_half_life_days": args.hotfresh_half_life_days,
         "workers": args.workers,
         "candidate_batch_size": args.candidate_batch_size,
         "item_batch_size": args.item_batch_size,
@@ -266,6 +296,10 @@ def main():
             "swing_max_pair_users": args.swing_max_pair_users,
             "swing_max_sim_items": args.swing_max_sim_items,
             "item2vec_max_user_items": args.item2vec_max_user_items,
+            "eges_window": args.eges_window,
+            "eges_max_user_items": args.eges_max_user_items,
+            "eges_min_count": args.eges_min_count,
+            "hotfresh_half_life_days": args.hotfresh_half_life_days,
             "fusion": fusion_config,
         },
         "channel_metrics": channel_metrics,

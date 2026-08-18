@@ -9,6 +9,9 @@ from .models.mind import build_mind_model
 from .models.sdm import build_sdm_model
 from .models.freshness import build_freshness_model
 from .models.popularity import build_popularity_model
+from .models.hotfresh import build_hotfresh_model
+from .models.eges import build_eges_model
+from .models.youtubednn import build_youtubednn_model
 from .data.recall_data_loaders import (
     SwingDataLoader,
     Item2VecDataLoader,
@@ -86,6 +89,18 @@ class RecallManager:
             train_model('dssm', model, dataloader, self.config)
             self.models['dssm'] = model
 
+        elif self.model_type == 'youtubednn':
+            dataloader = build_dataloader(
+                'dssm',
+                train_data,
+                self.item_feature_dims,
+                batch_size=self.config.get("batch_size", 256),
+                num_negatives=0,
+            )
+            model = build_youtubednn_model(self.config, self.user_feature_dims, self.item_feature_dims)
+            train_model('youtubednn', model, dataloader, self.config)
+            self.models['youtubednn'] = model
+
         elif self.model_type == 'mind':
             dataloader = build_dataloader('mind', train_data, self.item_feature_dims, batch_size=self.config.get("batch_size", 256))
             model = build_mind_model(self.config, self.user_feature_dims, self.item_feature_dims)
@@ -108,6 +123,17 @@ class RecallManager:
             model = build_popularity_model(self.config)
             model.fit(train_data)
             self.models['popularity'] = model
+
+        elif self.model_type == 'hotfresh':
+            if video_info is not None:
+                model = build_hotfresh_model(self.config, video_info)
+                model.fit(train_data)
+                self.models['hotfresh'] = model
+
+        elif self.model_type == 'eges':
+            model = build_eges_model(self.config)
+            model.fit(train_data)
+            self.models['eges'] = model
 
     def generate_candidates(self, user_sequences: dict, all_item_ids: list, top_k: int = 100):
         recall_results = {}
@@ -133,6 +159,18 @@ class RecallManager:
         elif 'dssm' in self.models:
             recall_results = generate_recall_candidates_dssm(
                 self.models['dssm'],
+                user_sequences,
+                all_item_ids,
+                self.item_feature_index,
+                self.user_feature_index,
+                top_k,
+                self.config.get("candidate_batch_size", 32),
+                self.config.get("item_batch_size", 50000),
+            )
+
+        elif 'youtubednn' in self.models:
+            recall_results = generate_recall_candidates_dssm(
+                self.models['youtubednn'],
                 user_sequences,
                 all_item_ids,
                 self.item_feature_index,
@@ -184,24 +222,44 @@ class RecallManager:
                 candidates = model.generate_recall_candidates(user_id, user_hist_items, all_item_ids, top_k)
                 recall_results[user_id] = candidates
 
+        elif 'hotfresh' in self.models:
+            model = self.models['hotfresh']
+            iterator = tqdm(user_sequences['user_id'], desc="Generate hotfresh candidates")
+            for i, user_id in enumerate(iterator):
+                user_hist_items = user_sequences['long_seq'][i]
+                user_hist_items = user_hist_items[user_hist_items != 0].tolist()
+                candidates = model.generate_recall_candidates(user_id, user_hist_items, all_item_ids, top_k)
+                recall_results[user_id] = candidates
+
+        elif 'eges' in self.models:
+            model = self.models['eges']
+            iterator = tqdm(user_sequences['user_id'], desc="Generate eges candidates")
+            for i, user_id in enumerate(iterator):
+                user_hist_items = user_sequences['long_seq'][i]
+                user_hist_items = user_hist_items[user_hist_items != 0].tolist()
+                candidates = model.generate_recall_candidates(user_id, user_hist_items, all_item_ids, top_k)
+                recall_results[user_id] = candidates
+
         return recall_results
 
     def evaluate(self, recall_results: dict, test_data: dict):
         return evaluate_recall(recall_results, test_data)
 
     def save_model(self, path: str):
-        if self.model_type in ['dssm', 'mind', 'sdm'] and self.model_type in self.models:
+        if self.model_type in ['dssm', 'mind', 'sdm', 'youtubednn'] and self.model_type in self.models:
             torch.save(self.models[self.model_type].state_dict(), path)
             print(f"模型已保存到 {path}")
 
     def load_model(self, path: str):
-        if self.model_type in ['dssm', 'mind', 'sdm']:
+        if self.model_type in ['dssm', 'mind', 'sdm', 'youtubednn']:
             if self.model_type == 'dssm':
                 model = build_dssm_model(self.config, self.user_feature_dims, self.item_feature_dims)
             elif self.model_type == 'mind':
                 model = build_mind_model(self.config, self.user_feature_dims, self.item_feature_dims)
             elif self.model_type == 'sdm':
                 model = build_sdm_model(self.config, self.user_feature_dims, self.item_feature_dims)
+            elif self.model_type == 'youtubednn':
+                model = build_youtubednn_model(self.config, self.user_feature_dims, self.item_feature_dims)
             model.load_state_dict(torch.load(path, map_location='cpu'))
             self.models[self.model_type] = model
             print(f"模型已从 {path} 加载")

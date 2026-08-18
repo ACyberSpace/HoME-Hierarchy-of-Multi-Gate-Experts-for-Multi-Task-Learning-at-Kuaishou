@@ -4,3 +4,6 @@ from .dssm import DSSM, build_dssm_model
 from .mind import MIND, build_mind_model
 from .sdm import SDM, build_sdm_model
 from .freshness import FreshnessRecall, build_freshness_model
+from .hotfresh import HotFreshRecall, build_hotfresh_model
+from .eges import EGESRecall, build_eges_model
+from .youtubednn import YouTubeDNN, build_youtubednn_model

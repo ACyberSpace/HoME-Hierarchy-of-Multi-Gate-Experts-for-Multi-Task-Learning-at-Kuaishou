@@ -1,5 +1,6 @@
 import pickle
 import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -368,6 +369,43 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     train_mask = ~test_mask
     test_index = np.flatnonzero(test_mask.to_numpy())
     train_index = np.flatnonzero(train_mask.to_numpy())
+
+    positive_columns = [
+        "is_click",
+        "long_view",
+        "is_like",
+        "is_comment",
+        "is_forward",
+        "is_follow",
+    ]
+
+    def count_positive(indices):
+        if len(indices) == 0:
+            return 0
+        positive_mask = np.zeros(len(indices), dtype=bool)
+        for label in positive_columns:
+            positive_mask |= df_merged[label].to_numpy()[indices] == 1
+        if "is_hate" in df_merged.columns:
+            positive_mask &= df_merged["is_hate"].to_numpy()[indices] != 1
+        return int(positive_mask.sum())
+
+    train_item_set = set(int(item_id) for item_id in df_merged["video_id"].to_numpy()[train_index])
+    raw_test_count = int(len(test_index))
+    raw_test_positive_count = count_positive(test_index)
+    seen_test_mask = np.array(
+        [int(item_id) in train_item_set for item_id in df_merged["video_id"].to_numpy()[test_index]],
+        dtype=bool,
+    )
+    test_index = test_index[seen_test_mask]
+    filtered_test_count = int(len(test_index))
+    filtered_unseen_test_count = raw_test_count - filtered_test_count
+    filtered_test_positive_count = count_positive(test_index)
+    print(
+        "Filtered test rows with unseen train items: "
+        f"{filtered_unseen_test_count}/{raw_test_count} rows removed; "
+        f"positive events {raw_test_positive_count}->{filtered_test_positive_count}"
+    )
+
     split_seq_arrays = {
         "train": {
             "short_seq": short_seq_array[train_index],
@@ -410,6 +448,19 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         save_path.parent.mkdir(parents=True)
 
     joblib.dump(train_eval_dict, save_path, compress=3)
+    preprocess_metadata = {
+        "split": {
+            "train_rows": int(len(train_index)),
+            "raw_test_rows": raw_test_count,
+            "filtered_test_rows": filtered_test_count,
+            "filtered_unseen_test_rows": filtered_unseen_test_count,
+            "raw_test_positive_events": raw_test_positive_count,
+            "filtered_test_positive_events": filtered_test_positive_count,
+            "test_filter": "drop test rows whose encoded video_id does not appear in train split",
+        }
+    }
+    with open(output_path / "preprocess_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(preprocess_metadata, f, ensure_ascii=False, indent=2)
 
     print("召回训练数据将直接使用按日期划分的 kuairand_train_eval.pkl")
 
