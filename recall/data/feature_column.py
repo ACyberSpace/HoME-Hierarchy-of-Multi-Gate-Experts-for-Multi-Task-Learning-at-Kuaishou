@@ -81,6 +81,11 @@ RECALL_ITEM_FEATURES = [
     "video_id",
     "author_id",
     "music_id",
+    "tag",
+    "video_type",
+    "upload_type",
+    "visible_status",
+    "music_type",
 ]
 
 RECALL_SEQ_FEATURES = [

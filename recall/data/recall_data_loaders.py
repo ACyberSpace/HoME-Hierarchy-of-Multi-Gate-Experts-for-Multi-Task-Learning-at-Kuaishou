@@ -1,4 +1,3 @@
-import random
 from typing import Dict, List, Tuple
 import numpy as np
 import torch
@@ -81,10 +80,11 @@ class Item2VecDataLoader:
 
 
 class DSSMDataset(Dataset):
-    def __init__(self, train_data: Dict, item_feature_dims: Dict, num_negatives: int = 4):
+    def __init__(self, train_data: Dict, item_feature_dims: Dict, num_negatives: int = 4, max_negative_retries: int = 20):
         self.train_data = train_data
         self.item_feature_dims = item_feature_dims
         self.num_negatives = num_negatives
+        self.max_negative_retries = max_negative_retries
         self.all_items = np.array(list(set(train_data["video_id"])))
         self.positive_mask = build_recall_positive_mask(train_data)
         self.positive_indices = np.where(self.positive_mask)[0]
@@ -93,40 +93,30 @@ class DSSMDataset(Dataset):
         for idx, video_id in enumerate(train_data["video_id"]):
             if video_id not in self.item_index:
                 self.item_index[video_id] = idx
-        self._pre_sample_negatives()
 
-    def _pre_sample_negatives(self):
-        self.neg_item_ids_list = []
-        for idx in self.positive_indices:
-            user_id = int(self.train_data["user_id"][idx])
-            pos_item_id = self.train_data["video_id"][idx]
-            user_positive_items = self.user_positive_items.get(user_id, set())
-            candidate_items = [
-                int(item_id)
-                for item_id in self.all_items
-                if int(item_id) not in user_positive_items
-            ]
-            if not candidate_items:
-                candidate_items = [
-                    int(item_id)
-                    for item_id in self.all_items
-                    if int(item_id) != int(pos_item_id)
-                ]
+    def _sample_negative_items(self, user_id: int, pos_item_id: int) -> List[int]:
+        user_positive_items = self.user_positive_items.get(user_id, set())
+        neg_item_ids = []
 
-            if len(candidate_items) >= self.num_negatives:
-                neg_item_ids = random.sample(candidate_items, self.num_negatives)
-            else:
-                neg_item_ids = [
-                    candidate_items[random.randint(0, len(candidate_items) - 1)]
-                    for _ in range(self.num_negatives)
-                ] if candidate_items else []
-            self.neg_item_ids_list.append(neg_item_ids)
+        for _ in range(self.num_negatives):
+            neg_item_id = int(pos_item_id)
+            for _ in range(self.max_negative_retries):
+                candidate = int(self.all_items[np.random.randint(0, len(self.all_items))])
+                if candidate != pos_item_id and candidate not in user_positive_items:
+                    neg_item_id = candidate
+                    break
+            if neg_item_id == pos_item_id:
+                neg_item_id = int(self.all_items[np.random.randint(0, len(self.all_items))])
+            neg_item_ids.append(neg_item_id)
 
+        return neg_item_ids
     def __len__(self):
         return len(self.positive_indices)
 
     def __getitem__(self, idx):
         data_idx = self.positive_indices[idx]
+        user_id = int(self.train_data["user_id"][data_idx])
+        pos_item_id = int(self.train_data["video_id"][data_idx])
 
         user_features = {}
         user_features["short_seq"] = self.train_data["short_seq"][data_idx]
@@ -141,7 +131,7 @@ class DSSMDataset(Dataset):
                 pos_item_features[feat_name] = self.train_data[feat_name][data_idx]
 
         neg_item_features_list = []
-        for neg_item_id in self.neg_item_ids_list[idx]:
+        for neg_item_id in self._sample_negative_items(user_id, pos_item_id):
             if neg_item_id in self.item_index:
                 neg_idx = self.item_index[neg_item_id]
                 neg_item_features = {}
@@ -227,9 +217,9 @@ def get_dataloader(dataset, batch_size=1024, shuffle=True, num_workers=0, pin_me
                       num_workers=num_workers, pin_memory=pin_memory, drop_last=True)
 
 
-def build_dataloader(model_type: str, train_data: Dict, item_feature_dims: Dict, batch_size: int = 256):
+def build_dataloader(model_type: str, train_data: Dict, item_feature_dims: Dict, batch_size: int = 256, num_negatives: int = 4):
     if model_type == 'dssm':
-        dataset = DSSMDataset(train_data, item_feature_dims)
+        dataset = DSSMDataset(train_data, item_feature_dims, num_negatives=num_negatives)
     elif model_type == 'mind':
         dataset = MINDDataset(train_data, item_feature_dims)
     elif model_type == 'sdm':

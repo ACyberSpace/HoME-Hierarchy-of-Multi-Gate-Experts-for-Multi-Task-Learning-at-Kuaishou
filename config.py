@@ -108,24 +108,20 @@ class TrainConfig:
 class RecallFusionConfig:
     """Recall fusion configuration."""
     channels: List[str] = field(default_factory=lambda: [
-        "swing", "item2vec", "dssm", "mind", "sdm", "freshness"
+        "dssm", "sdm", "popularity", "freshness"
     ])
     weights: Dict[str, float] = field(default_factory=lambda: {
-        "swing": 1.0,
-        "item2vec": 1.0,
         "dssm": 1.0,
-        "mind": 1.0,
         "sdm": 1.0,
+        "popularity": 1.0,
         "freshness": 1.0,
     })
     rank_base: float = 0.0
     top_k: int = 100
     min_quota_per_channel: Dict[str, int] = field(default_factory=lambda: {
-        "swing": 5,
-        "item2vec": 5,
         "dssm": 5,
-        "mind": 5,
         "sdm": 5,
+        "popularity": 5,
         "freshness": 5,
     })
 

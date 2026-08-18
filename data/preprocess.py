@@ -492,12 +492,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
         if pd.isna(upload_dt):
             return 0.0
         try:
-            date_str = str(int(upload_dt))
-            year = int(date_str[:4])
-            month = int(date_str[4:6])
-            day = int(date_str[6:8])
-            dt = datetime(year, month, day)
-            return dt.timestamp()
+            return pd.to_datetime(upload_dt).timestamp()
         except:
             return 0.0
 

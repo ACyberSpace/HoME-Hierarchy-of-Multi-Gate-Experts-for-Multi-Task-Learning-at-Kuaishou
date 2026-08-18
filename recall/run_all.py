@@ -20,17 +20,19 @@ from recall.evaluation.evaluator import (
 from recall.manager import RecallManager
 
 
-DEFAULT_CHANNELS = ["swing", "item2vec", "dssm", "mind", "sdm", "freshness"]
+ALL_CHANNELS = ["dssm", "sdm", "popularity", "freshness", "item2vec", "swing", "mind"]
+DEFAULT_CHANNELS = ["dssm", "sdm", "popularity", "freshness"]
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train, evaluate, and fuse all recall channels.")
     parser.add_argument("--data_dir", type=str, default="./data")
-    parser.add_argument("--channels", nargs="*", default=DEFAULT_CHANNELS, choices=DEFAULT_CHANNELS)
+    parser.add_argument("--channels", nargs="*", default=DEFAULT_CHANNELS, choices=ALL_CHANNELS)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--embedding_dim", type=int, default=64)
+    parser.add_argument("--num_negatives", type=int, default=4)
     parser.add_argument("--top_k", type=int, default=100)
     parser.add_argument("--rank_base", type=float, default=0.0)
     parser.add_argument("--min_quota", type=int, default=5)
@@ -43,6 +45,8 @@ def parse_args():
     parser.add_argument("--swing_max_sim_items", type=int, default=200)
     parser.add_argument("--item2vec_max_user_items", type=int, default=50)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--candidate_batch_size", type=int, default=32)
+    parser.add_argument("--item_batch_size", type=int, default=50000)
     parser.add_argument("--output_path", type=str, default="checkpoints/recall/all_recall_metrics.json")
     parser.add_argument("--save_candidates", action="store_true")
     parser.add_argument("--candidates_path", type=str, default="checkpoints/recall/all_recall_candidates.pkl")
@@ -50,19 +54,42 @@ def parse_args():
 
 
 def build_base_config(args, feature_dims, model_type):
+    item_feature_names = [
+        "video_id",
+        "author_id",
+        "music_id",
+        "tag",
+        "video_type",
+        "upload_type",
+        "visible_status",
+        "music_type",
+    ]
+    user_feature_names = [
+        "user_id",
+        "user_active_degree",
+        "is_live_streamer",
+        "is_video_author",
+        "follow_user_num_range",
+        "fans_user_num_range",
+        "friend_user_num_range",
+        "register_days_range",
+    ]
     return {
         "model_type": model_type,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
         "lr": args.lr,
         "embedding_dim": args.embedding_dim,
+        "num_negatives": args.num_negatives,
         "item_feature_dims": {
-            "video_id": feature_dims["video_id"],
-            "author_id": feature_dims["author_id"],
-            "music_id": feature_dims["music_id"],
+            feature_name: feature_dims[feature_name]
+            for feature_name in item_feature_names
+            if feature_name in feature_dims
         },
         "user_feature_dims": {
-            "user_id": feature_dims["user_id"],
+            feature_name: feature_dims[feature_name]
+            for feature_name in user_feature_names
+            if feature_name in feature_dims
         },
         "alpha1": args.swing_alpha1,
         "alpha2": args.swing_alpha2,
@@ -73,6 +100,8 @@ def build_base_config(args, feature_dims, model_type):
         "max_sim_items": args.swing_max_sim_items,
         "item2vec_max_user_items": args.item2vec_max_user_items,
         "workers": args.workers,
+        "candidate_batch_size": args.candidate_batch_size,
+        "item_batch_size": args.item_batch_size,
     }
 
 
@@ -149,8 +178,11 @@ def main():
             "epochs": args.epochs,
             "lr": args.lr,
             "embedding_dim": args.embedding_dim,
+            "num_negatives": args.num_negatives,
             "top_k": args.top_k,
             "workers": args.workers,
+            "candidate_batch_size": args.candidate_batch_size,
+            "item_batch_size": args.item_batch_size,
             "swing_alpha1": args.swing_alpha1,
             "swing_alpha2": args.swing_alpha2,
             "swing_beta": args.swing_beta,

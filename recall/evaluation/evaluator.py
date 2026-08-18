@@ -1,9 +1,10 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from recall.data.labels import build_recall_positive_mask
-from recall.data.feature_column import RECALL_ITEM_FEATURES
+from recall.data.feature_column import RECALL_ITEM_FEATURES, RECALL_USER_FEATURES
 
 
 def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100]):
@@ -152,7 +153,57 @@ def _build_item_feature_tensors(all_item_ids, item_feature_index, device):
     return features
 
 
-def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, item_feature_index=None, top_k=100, batch_size=256):
+def _build_item_representations(model, all_item_ids, item_feature_index, device, item_batch_size=50000):
+    item_repr_chunks = []
+    for start in tqdm(range(0, len(all_item_ids), item_batch_size), desc="构建 item 向量"):
+        batch_item_ids = all_item_ids[start:start + item_batch_size]
+        item_features = _build_item_feature_tensors(batch_item_ids, item_feature_index, device)
+        with torch.no_grad():
+            item_repr = model.get_item_repr(item_features)
+            item_repr_chunks.append(F.normalize(item_repr, dim=-1).cpu())
+    return torch.cat(item_repr_chunks, dim=0)
+
+
+def _topk_from_item_chunks(user_repr, item_repr, top_k, item_chunk_size):
+    user_repr = F.normalize(user_repr, dim=-1)
+    candidate_scores = []
+    candidate_indices = []
+
+    for start in range(0, item_repr.shape[0], item_chunk_size):
+        chunk = item_repr[start:start + item_chunk_size].to(user_repr.device)
+        scores = torch.matmul(user_repr, chunk.T)
+        chunk_k = min(top_k, scores.shape[1])
+        values, indices = torch.topk(scores, chunk_k, dim=1)
+        candidate_scores.append(values)
+        candidate_indices.append(indices + start)
+
+    merged_scores = torch.cat(candidate_scores, dim=1)
+    merged_indices = torch.cat(candidate_indices, dim=1)
+    final_k = min(top_k, merged_scores.shape[1])
+    final_scores, final_positions = torch.topk(merged_scores, final_k, dim=1)
+    return torch.gather(merged_indices, 1, final_positions)
+
+
+def _build_batch_user_features(batch_user_ids, user_feature_index, device):
+    features = {
+        "user_id": torch.tensor(batch_user_ids, dtype=torch.long).to(device),
+    }
+    if not user_feature_index:
+        return features
+
+    for feat_name in RECALL_USER_FEATURES:
+        if feat_name == "user_id":
+            continue
+        values = [
+            int(user_feature_index.get(int(user_id), {}).get(feat_name, 0))
+            for user_id in batch_user_ids
+        ]
+        features[feat_name] = torch.tensor(values, dtype=torch.long).to(device)
+
+    return features
+
+
+def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, item_feature_index=None, user_feature_index=None, top_k=100, batch_size=32, item_batch_size=50000):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -160,25 +211,28 @@ def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, item_fe
     recall_results = {}
     user_ids = user_sequences["user_id"]
 
-    item_features = _build_item_feature_tensors(all_item_ids, item_feature_index, device)
-    with torch.no_grad():
-        item_repr = model.get_item_repr(item_features)
+    item_repr = _build_item_representations(
+        model, all_item_ids, item_feature_index, device, item_batch_size
+    )
 
     for i in tqdm(range(0, len(user_ids), batch_size), desc="生成召回候选"):
         batch_user_ids = user_ids[i:i+batch_size]
         batch_short_seq = user_sequences["short_seq"][i:i+batch_size]
         batch_short_mask = user_sequences["short_mask"][i:i+batch_size]
 
-        user_features = {
-            "user_id": torch.tensor(batch_user_ids, dtype=torch.long).to(device),
+        user_features = _build_batch_user_features(
+            batch_user_ids, user_feature_index, device
+        )
+        user_features.update({
             "short_seq": torch.tensor(batch_short_seq, dtype=torch.long).to(device),
             "short_mask": torch.tensor(batch_short_mask, dtype=torch.long).to(device),
-        }
+        })
 
         with torch.no_grad():
             user_repr = model.get_user_repr(user_features)
-            scores = torch.matmul(user_repr, item_repr.T)
-            top_indices = torch.topk(scores, top_k, dim=1)[1]
+            top_indices = _topk_from_item_chunks(
+                user_repr, item_repr, top_k, item_batch_size
+            )
 
         for j, user_id in enumerate(batch_user_ids):
             candidates = [all_item_ids[idx.item()] for idx in top_indices[j]]
@@ -187,7 +241,7 @@ def generate_recall_candidates_dssm(model, user_sequences, all_item_ids, item_fe
     return recall_results
 
 
-def generate_recall_candidates_mind(model, user_sequences, all_item_ids, item_feature_index=None, top_k=100, batch_size=256):
+def generate_recall_candidates_mind(model, user_sequences, all_item_ids, item_feature_index=None, user_feature_index=None, top_k=100, batch_size=32, item_batch_size=50000):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -195,26 +249,41 @@ def generate_recall_candidates_mind(model, user_sequences, all_item_ids, item_fe
     recall_results = {}
     user_ids = user_sequences["user_id"]
 
-    item_features = _build_item_feature_tensors(all_item_ids, item_feature_index, device)
-    with torch.no_grad():
-        item_repr = model.get_item_repr(item_features)
+    item_repr = _build_item_representations(
+        model, all_item_ids, item_feature_index, device, item_batch_size
+    )
 
     for i in tqdm(range(0, len(user_ids), batch_size), desc="生成召回候选"):
         batch_user_ids = user_ids[i:i+batch_size]
         batch_short_seq = user_sequences["short_seq"][i:i+batch_size]
         batch_short_mask = user_sequences["short_mask"][i:i+batch_size]
 
-        user_features = {
-            "user_id": torch.tensor(batch_user_ids, dtype=torch.long).to(device),
+        user_features = _build_batch_user_features(
+            batch_user_ids, user_feature_index, device
+        )
+        user_features.update({
             "short_seq": torch.tensor(batch_short_seq, dtype=torch.long).to(device),
             "short_mask": torch.tensor(batch_short_mask, dtype=torch.long).to(device),
-        }
+        })
 
         with torch.no_grad():
             interest_embeddings = model.get_user_interests(user_features)
-            scores = torch.matmul(interest_embeddings, item_repr.T)
-            max_scores, _ = torch.max(scores, dim=1)
-            top_indices = torch.topk(max_scores, top_k, dim=1)[1]
+            interest_embeddings = F.normalize(interest_embeddings, dim=-1)
+            candidate_scores = []
+            candidate_indices = []
+            for start in range(0, item_repr.shape[0], item_batch_size):
+                chunk = item_repr[start:start + item_batch_size].to(device)
+                scores = torch.matmul(interest_embeddings, chunk.T)
+                max_scores, _ = torch.max(scores, dim=1)
+                chunk_k = min(top_k, max_scores.shape[1])
+                values, indices = torch.topk(max_scores, chunk_k, dim=1)
+                candidate_scores.append(values)
+                candidate_indices.append(indices + start)
+            merged_scores = torch.cat(candidate_scores, dim=1)
+            merged_indices = torch.cat(candidate_indices, dim=1)
+            final_k = min(top_k, merged_scores.shape[1])
+            _, final_positions = torch.topk(merged_scores, final_k, dim=1)
+            top_indices = torch.gather(merged_indices, 1, final_positions)
 
         for j, user_id in enumerate(batch_user_ids):
             candidates = [all_item_ids[idx.item()] for idx in top_indices[j]]
@@ -223,7 +292,7 @@ def generate_recall_candidates_mind(model, user_sequences, all_item_ids, item_fe
     return recall_results
 
 
-def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, item_feature_index=None, top_k=100, batch_size=256):
+def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, item_feature_index=None, user_feature_index=None, top_k=100, batch_size=32, item_batch_size=50000):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -231,9 +300,9 @@ def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, item_fea
     recall_results = {}
     user_ids = user_sequences["user_id"]
 
-    item_features = _build_item_feature_tensors(all_item_ids, item_feature_index, device)
-    with torch.no_grad():
-        item_repr = model.get_item_repr(item_features)
+    item_repr = _build_item_representations(
+        model, all_item_ids, item_feature_index, device, item_batch_size
+    )
 
     for i in tqdm(range(0, len(user_ids), batch_size), desc="生成召回候选"):
         batch_user_ids = user_ids[i:i+batch_size]
@@ -242,18 +311,21 @@ def generate_recall_candidates_sdm(model, user_sequences, all_item_ids, item_fea
         batch_long_seq = user_sequences["long_seq"][i:i+batch_size]
         batch_long_mask = user_sequences["long_mask"][i:i+batch_size]
 
-        user_features = {
-            "user_id": torch.tensor(batch_user_ids, dtype=torch.long).to(device),
+        user_features = _build_batch_user_features(
+            batch_user_ids, user_feature_index, device
+        )
+        user_features.update({
             "short_seq": torch.tensor(batch_short_seq, dtype=torch.long).to(device),
             "short_mask": torch.tensor(batch_short_mask, dtype=torch.long).to(device),
             "long_seq": torch.tensor(batch_long_seq, dtype=torch.long).to(device),
             "long_mask": torch.tensor(batch_long_mask, dtype=torch.long).to(device),
-        }
+        })
 
         with torch.no_grad():
             user_repr = model.get_user_repr(user_features)
-            scores = torch.matmul(user_repr, item_repr.T)
-            top_indices = torch.topk(scores, top_k, dim=1)[1]
+            top_indices = _topk_from_item_chunks(
+                user_repr, item_repr, top_k, item_batch_size
+            )
 
         for j, user_id in enumerate(batch_user_ids):
             candidates = [all_item_ids[idx.item()] for idx in top_indices[j]]
