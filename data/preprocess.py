@@ -519,7 +519,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Preprocess KuaiRand-1K for HoME.")
-    parser.add_argument("--input_path", type=str, default="../KuaiRand-1K")
+    parser.add_argument("--input_path", type=str, default="./KuaiRand-1K")
     parser.add_argument("--output_path", type=str, default="./data")
     args = parser.parse_args()
 
