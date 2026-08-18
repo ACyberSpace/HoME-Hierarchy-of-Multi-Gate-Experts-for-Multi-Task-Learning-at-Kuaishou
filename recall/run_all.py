@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--embedding_dim", type=int, default=64)
     parser.add_argument("--num_negatives", type=int, default=4)
+    parser.add_argument("--softmax_temperature", type=float, default=0.05)
     parser.add_argument("--top_k", type=int, default=100)
     parser.add_argument("--rank_base", type=float, default=0.0)
     parser.add_argument("--min_quota", type=int, default=5)
@@ -81,6 +82,7 @@ def build_base_config(args, feature_dims, model_type):
         "lr": args.lr,
         "embedding_dim": args.embedding_dim,
         "num_negatives": args.num_negatives,
+        "softmax_temperature": args.softmax_temperature,
         "item_feature_dims": {
             feature_name: feature_dims[feature_name]
             for feature_name in item_feature_names
@@ -179,6 +181,7 @@ def main():
             "lr": args.lr,
             "embedding_dim": args.embedding_dim,
             "num_negatives": args.num_negatives,
+            "softmax_temperature": args.softmax_temperature,
             "top_k": args.top_k,
             "workers": args.workers,
             "candidate_batch_size": args.candidate_batch_size,

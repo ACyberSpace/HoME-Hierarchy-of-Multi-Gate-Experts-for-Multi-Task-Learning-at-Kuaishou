@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
 
@@ -24,11 +25,18 @@ def train_item2vec(model, data_loader):
     print("Item2Vec训练完成")
 
 
-def train_dssm(model, dataloader, epochs=5, lr=0.001):
+def _in_batch_softmax_loss(user_repr, item_repr, temperature=0.05):
+    user_repr = F.normalize(user_repr, dim=1)
+    item_repr = F.normalize(item_repr, dim=1)
+    logits = torch.matmul(user_repr, item_repr.t()) / temperature
+    labels = torch.arange(logits.size(0), device=logits.device)
+    return F.cross_entropy(logits, labels)
+
+
+def train_dssm(model, dataloader, epochs=5, lr=0.001, temperature=0.05):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCELoss()
 
     for epoch in range(epochs):
         model.train()
@@ -36,22 +44,10 @@ def train_dssm(model, dataloader, epochs=5, lr=0.001):
         for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}"):
             user_features = {k: v.long().to(device) for k, v in batch["user_features"].items()}
             pos_item_features = {k: v.long().to(device) for k, v in batch["pos_item_features"].items()}
-            neg_item_features_list = [{k: v.long().to(device) for k, v in neg.items()} for neg in batch["neg_item_features_list"]]
 
-            pos_score = model(user_features, pos_item_features)
-            pos_label = torch.ones_like(pos_score)
-
-            neg_scores = []
-            for neg_features in neg_item_features_list:
-                neg_score = model(user_features, neg_features)
-                neg_scores.append(neg_score)
-            neg_scores = torch.stack(neg_scores, dim=1)
-            neg_label = torch.zeros_like(neg_scores)
-
-            scores = torch.cat([pos_score.unsqueeze(1), neg_scores], dim=1)
-            labels = torch.cat([pos_label.unsqueeze(1), neg_label], dim=1)
-
-            loss = criterion(torch.sigmoid(scores), labels)
+            user_repr = model.get_user_repr(user_features)
+            item_repr = model.get_item_repr(pos_item_features)
+            loss = _in_batch_softmax_loss(user_repr, item_repr, temperature)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -84,11 +80,10 @@ def train_mind(model, dataloader, epochs=5, lr=0.001):
         print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}")
 
 
-def train_sdm(model, dataloader, epochs=5, lr=0.001):
+def train_sdm(model, dataloader, epochs=5, lr=0.001, temperature=0.05):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCELoss()
 
     for epoch in range(epochs):
         model.train()
@@ -96,10 +91,10 @@ def train_sdm(model, dataloader, epochs=5, lr=0.001):
         for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}"):
             user_features = {k: v.long().to(device) for k, v in batch["user_features"].items()}
             item_features = {k: v.long().to(device) for k, v in batch["item_features"].items()}
-            labels = batch["label"].float().to(device)
 
-            scores = model(user_features, item_features)
-            loss = criterion(torch.sigmoid(scores), labels)
+            user_repr = model.get_user_repr(user_features)
+            item_repr = model.get_item_repr(item_features)
+            loss = _in_batch_softmax_loss(user_repr, item_repr, temperature)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -114,10 +109,22 @@ def train_model(model_type: str, model, data_loader, config: dict):
     elif model_type == 'item2vec':
         train_item2vec(model, data_loader)
     elif model_type == 'dssm':
-        train_dssm(model, data_loader, epochs=config.get("epochs", 5), lr=config.get("lr", 0.001))
+        train_dssm(
+            model,
+            data_loader,
+            epochs=config.get("epochs", 5),
+            lr=config.get("lr", 0.001),
+            temperature=config.get("softmax_temperature", 0.05),
+        )
     elif model_type == 'mind':
         train_mind(model, data_loader, epochs=config.get("epochs", 5), lr=config.get("lr", 0.001))
     elif model_type == 'sdm':
-        train_sdm(model, data_loader, epochs=config.get("epochs", 5), lr=config.get("lr", 0.001))
+        train_sdm(
+            model,
+            data_loader,
+            epochs=config.get("epochs", 5),
+            lr=config.get("lr", 0.001),
+            temperature=config.get("softmax_temperature", 0.05),
+        )
     else:
         raise ValueError(f"Unsupported model type: {model_type}")

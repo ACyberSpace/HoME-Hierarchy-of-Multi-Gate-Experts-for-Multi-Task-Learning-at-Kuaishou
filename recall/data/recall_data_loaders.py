@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from .feature_column import FeatureColumn, FEATURE_GROUPS, RECALL_USER_FEATURES, RECALL_ITEM_FEATURES
-from .labels import build_recall_positive_mask, build_user_positive_items
+from .labels import build_recall_positive_mask
 
 
 class SwingDataLoader:
@@ -85,38 +85,14 @@ class DSSMDataset(Dataset):
         self.item_feature_dims = item_feature_dims
         self.num_negatives = num_negatives
         self.max_negative_retries = max_negative_retries
-        self.all_items = np.array(list(set(train_data["video_id"])))
         self.positive_mask = build_recall_positive_mask(train_data)
         self.positive_indices = np.where(self.positive_mask)[0]
-        self.user_positive_items = build_user_positive_items(train_data)
-        self.item_index = {}
-        for idx, video_id in enumerate(train_data["video_id"]):
-            if video_id not in self.item_index:
-                self.item_index[video_id] = idx
 
-    def _sample_negative_items(self, user_id: int, pos_item_id: int) -> List[int]:
-        user_positive_items = self.user_positive_items.get(user_id, set())
-        neg_item_ids = []
-
-        for _ in range(self.num_negatives):
-            neg_item_id = int(pos_item_id)
-            for _ in range(self.max_negative_retries):
-                candidate = int(self.all_items[np.random.randint(0, len(self.all_items))])
-                if candidate != pos_item_id and candidate not in user_positive_items:
-                    neg_item_id = candidate
-                    break
-            if neg_item_id == pos_item_id:
-                neg_item_id = int(self.all_items[np.random.randint(0, len(self.all_items))])
-            neg_item_ids.append(neg_item_id)
-
-        return neg_item_ids
     def __len__(self):
         return len(self.positive_indices)
 
     def __getitem__(self, idx):
         data_idx = self.positive_indices[idx]
-        user_id = int(self.train_data["user_id"][data_idx])
-        pos_item_id = int(self.train_data["video_id"][data_idx])
 
         user_features = {}
         user_features["short_seq"] = self.train_data["short_seq"][data_idx]
@@ -130,22 +106,9 @@ class DSSMDataset(Dataset):
             if feat_name in self.train_data:
                 pos_item_features[feat_name] = self.train_data[feat_name][data_idx]
 
-        neg_item_features_list = []
-        for neg_item_id in self._sample_negative_items(user_id, pos_item_id):
-            if neg_item_id in self.item_index:
-                neg_idx = self.item_index[neg_item_id]
-                neg_item_features = {}
-                for feat_name in RECALL_ITEM_FEATURES:
-                    if feat_name in self.train_data:
-                        neg_item_features[feat_name] = self.train_data[feat_name][neg_idx]
-                neg_item_features_list.append(neg_item_features)
-            else:
-                neg_item_features_list.append({"video_id": neg_item_id})
-
         return {
             "user_features": user_features,
             "pos_item_features": pos_item_features,
-            "neg_item_features_list": neg_item_features_list,
         }
 
 
@@ -183,32 +146,33 @@ class SDMDataset(Dataset):
     def __init__(self, train_data: Dict, item_feature_dims: Dict):
         self.train_data = train_data
         self.item_feature_dims = item_feature_dims
-        self.labels = build_recall_positive_mask(train_data).astype(np.float32)
+        self.positive_mask = build_recall_positive_mask(train_data)
+        self.positive_indices = np.where(self.positive_mask)[0]
 
     def __len__(self):
-        return len(self.train_data["user_id"])
+        return len(self.positive_indices)
 
     def __getitem__(self, idx):
+        data_idx = self.positive_indices[idx]
         user_features = {}
-        user_features["short_seq"] = self.train_data["short_seq"][idx]
-        user_features["short_mask"] = self.train_data["short_mask"][idx]
-        user_features["long_seq"] = self.train_data["long_seq"][idx]
-        user_features["long_mask"] = self.train_data["long_mask"][idx]
+        user_features["short_seq"] = self.train_data["short_seq"][data_idx]
+        user_features["short_mask"] = self.train_data["short_mask"][data_idx]
+        user_features["long_seq"] = self.train_data["long_seq"][data_idx]
+        user_features["long_mask"] = self.train_data["long_mask"][data_idx]
         for feat_name in RECALL_USER_FEATURES:
             if feat_name in self.train_data:
-                user_features[feat_name] = self.train_data[feat_name][idx]
+                user_features[feat_name] = self.train_data[feat_name][data_idx]
 
         item_features = {}
         for feat_name in RECALL_ITEM_FEATURES:
             if feat_name in self.train_data:
-                item_features[feat_name] = self.train_data[feat_name][idx]
+                item_features[feat_name] = self.train_data[feat_name][data_idx]
 
         return {
             "user_features": user_features,
             "item_features": item_features,
-            "label": self.labels[idx],
-            "short_seq_len": np.sum(self.train_data["short_mask"][idx]),
-            "long_seq_len": np.sum(self.train_data["long_mask"][idx]),
+            "short_seq_len": np.sum(self.train_data["short_mask"][data_idx]),
+            "long_seq_len": np.sum(self.train_data["long_mask"][data_idx]),
         }
 
 
