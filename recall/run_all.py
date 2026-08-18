@@ -21,11 +21,12 @@ from recall.manager import RecallManager
 
 
 ALL_CHANNELS = ["dssm", "sdm", "popularity", "freshness", "item2vec", "swing", "mind"]
-DEFAULT_CHANNELS = ["dssm", "sdm", "popularity", "freshness"]
+CHANNEL_RUN_ORDER = ["popularity", "freshness", "dssm", "sdm", "item2vec", "swing", "mind"]
+DEFAULT_CHANNELS = ["popularity", "freshness", "dssm", "sdm"]
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train, evaluate, and fuse all recall channels.")
+    parser = argparse.ArgumentParser(description="Train, evaluate, and fuse recall channels.")
     parser.add_argument("--data_dir", type=str, default="./data")
     parser.add_argument("--channels", nargs="*", default=DEFAULT_CHANNELS, choices=ALL_CHANNELS)
     parser.add_argument("--batch_size", type=int, default=256)
@@ -51,7 +52,19 @@ def parse_args():
     parser.add_argument("--output_path", type=str, default="checkpoints/recall/all_recall_metrics.json")
     parser.add_argument("--save_candidates", action="store_true")
     parser.add_argument("--candidates_path", type=str, default="checkpoints/recall/all_recall_candidates.pkl")
+    parser.add_argument("--channel_cache_dir", type=str, default="checkpoints/recall/channel_candidates")
+    parser.add_argument("--force_recall", action="store_true")
     return parser.parse_args()
+
+
+def order_channels(channels):
+    selected = list(dict.fromkeys(channels))
+    order_rank = {channel: idx for idx, channel in enumerate(CHANNEL_RUN_ORDER)}
+    return sorted(selected, key=lambda channel: order_rank.get(channel, len(order_rank)))
+
+
+def get_channel_cache_path(cache_dir, channel, top_k):
+    return Path(cache_dir) / f"{channel}_top{top_k}_candidates.pkl"
 
 
 def build_base_config(args, feature_dims, model_type):
@@ -107,12 +120,60 @@ def build_base_config(args, feature_dims, model_type):
     }
 
 
+def run_or_load_channel(
+    channel,
+    args,
+    feature_dims,
+    train_data,
+    test_data,
+    user_sequences,
+    video_info,
+    all_item_ids,
+    cache_dir,
+):
+    cache_path = get_channel_cache_path(cache_dir, channel, args.top_k)
+    channel_start = time.time()
+
+    print("=" * 80)
+    print(f"Recall channel: {channel}")
+    print("=" * 80)
+
+    if cache_path.exists() and not args.force_recall:
+        print(f"[{channel}] cache found, skip training and generation: {cache_path}")
+        cached = joblib.load(cache_path)
+        results = cached["results"] if isinstance(cached, dict) and "results" in cached else cached
+    else:
+        config = build_base_config(args, feature_dims, channel)
+        manager = RecallManager(config)
+        manager.train(train_data, user_sequences, video_info)
+        results = manager.generate_candidates(user_sequences, all_item_ids, top_k=args.top_k)
+        joblib.dump(
+            {
+                "channel": channel,
+                "top_k": args.top_k,
+                "results": results,
+                "config": config,
+            },
+            cache_path,
+            compress=3,
+        )
+        print(f"[{channel}] candidates saved: {cache_path}")
+
+    metrics = evaluate_recall(results, test_data, [args.top_k])
+    elapsed = time.time() - channel_start
+    print(f"[{channel}] {metrics}")
+    return results, metrics, elapsed, str(cache_path)
+
+
 def main():
     args = parse_args()
     start_time = time.time()
     data_dir = Path(args.data_dir)
+    channels = order_channels(args.channels)
+    channel_cache_dir = Path(args.channel_cache_dir)
+    channel_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    print("加载召回数据...")
+    print("Loading recall data...")
     train_eval_dict = joblib.load(data_dir / "kuairand_train_eval.pkl")
     user_sequences = joblib.load(data_dir / "user_sequences.pkl")
     video_info = joblib.load(data_dir / "video_info.pkl")
@@ -123,36 +184,37 @@ def main():
     all_item_ids = list(set(train_data["video_id"]))
     test_pool_overlap = compute_test_pool_overlap(all_item_ids, test_data)
 
-    print("测试正样本与训练候选池重叠统计:")
+    print("Test positives vs train candidate pool overlap:")
     print(json.dumps(test_pool_overlap, ensure_ascii=False, indent=2))
+    print(f"Requested channels: {args.channels}")
+    print(f"Run order: {channels}")
 
     channel_results = {}
     channel_metrics = {}
     channel_times = {}
+    channel_cache_paths = {}
 
-    for channel in tqdm(args.channels, desc="六路召回总进度"):
-        channel_start = time.time()
-        print("=" * 80)
-        print(f"训练并评估召回通道: {channel}")
-        print("=" * 80)
-
-        config = build_base_config(args, feature_dims, channel)
-        manager = RecallManager(config)
-        manager.train(train_data, user_sequences, video_info)
-
-        results = manager.generate_candidates(user_sequences, all_item_ids, top_k=args.top_k)
-        metrics = evaluate_recall(results, test_data, [args.top_k])
-
+    for channel in tqdm(channels, desc="Recall channel progress"):
+        results, metrics, elapsed, cache_path = run_or_load_channel(
+            channel,
+            args,
+            feature_dims,
+            train_data,
+            test_data,
+            user_sequences,
+            video_info,
+            all_item_ids,
+            channel_cache_dir,
+        )
         channel_results[channel] = results
         channel_metrics[channel] = metrics
-        channel_times[channel] = time.time() - channel_start
-
-        print(f"[{channel}] {metrics}")
+        channel_times[channel] = elapsed
+        channel_cache_paths[channel] = cache_path
 
     fusion_config = {
-        "weights": {channel: 1.0 for channel in args.channels},
+        "weights": {channel: 1.0 for channel in channels},
         "rank_base": args.rank_base,
-        "min_quota_per_channel": {channel: args.min_quota for channel in args.channels},
+        "min_quota_per_channel": {channel: args.min_quota for channel in channels},
     }
     pipeline = FullPipeline(
         data_path=str(data_dir),
@@ -162,20 +224,20 @@ def main():
     )
     test_user_ids = list(set(test_data["user_id"]))
     fused_results = pipeline._fuse_recall_results(
-        [(channel, channel_results[channel]) for channel in args.channels],
+        [(channel, channel_results[channel]) for channel in channels],
         test_user_ids,
         top_k=args.top_k,
     )
     fused_metrics = evaluate_recall(fused_results, test_data, [args.top_k])
     overlap = compute_channel_overlap(channel_results, top_k=args.top_k)
 
-    # Keep the direct helper output in the JSON so each channel has the same schema.
     channel_metrics = evaluate_recall_channels(channel_results, test_data, top_k=args.top_k)
 
     output = {
         "config": {
             "data_dir": str(data_dir),
-            "channels": args.channels,
+            "channels": channels,
+            "requested_channels": args.channels,
             "batch_size": args.batch_size,
             "epochs": args.epochs,
             "lr": args.lr,
@@ -186,6 +248,8 @@ def main():
             "workers": args.workers,
             "candidate_batch_size": args.candidate_batch_size,
             "item_batch_size": args.item_batch_size,
+            "channel_cache_dir": str(channel_cache_dir),
+            "force_recall": args.force_recall,
             "swing_alpha1": args.swing_alpha1,
             "swing_alpha2": args.swing_alpha2,
             "swing_beta": args.swing_beta,
@@ -201,6 +265,7 @@ def main():
         "test_pool_overlap": test_pool_overlap,
         "channel_overlap": overlap,
         "channel_times_seconds": channel_times,
+        "channel_cache_paths": channel_cache_paths,
         "elapsed_seconds": time.time() - start_time,
     }
 
@@ -208,7 +273,7 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
-    print(f"指标已保存: {output_path}")
+    print(f"Metrics saved: {output_path}")
     print(f"[fused] {fused_metrics}")
 
     if args.save_candidates:
@@ -223,7 +288,7 @@ def main():
             candidates_path,
             compress=3,
         )
-        print(f"候选已保存: {candidates_path}")
+        print(f"Fused candidates saved: {candidates_path}")
 
 
 if __name__ == "__main__":
