@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pipeline import FullPipeline
 from recall.evaluation.evaluator import (
     compute_channel_overlap,
+    compute_test_pool_overlap,
     evaluate_recall,
     evaluate_recall_channels,
 )
@@ -89,6 +90,10 @@ def main():
     train_data = train_eval_dict["train"]
     test_data = train_eval_dict["test"]
     all_item_ids = list(set(train_data["video_id"]))
+    test_pool_overlap = compute_test_pool_overlap(all_item_ids, test_data)
+
+    print("测试正样本与训练候选池重叠统计:")
+    print(json.dumps(test_pool_overlap, ensure_ascii=False, indent=2))
 
     channel_results = {}
     channel_metrics = {}
@@ -158,6 +163,7 @@ def main():
         },
         "channel_metrics": channel_metrics,
         "fused_metrics": fused_metrics,
+        "test_pool_overlap": test_pool_overlap,
         "channel_overlap": overlap,
         "channel_times_seconds": channel_times,
         "elapsed_seconds": time.time() - start_time,

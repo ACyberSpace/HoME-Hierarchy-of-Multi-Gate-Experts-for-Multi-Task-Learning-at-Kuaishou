@@ -62,6 +62,58 @@ def evaluate_recall_channels(channel_results, test_data, top_k=100):
     return channel_metrics
 
 
+def compute_test_pool_overlap(train_item_ids, test_data):
+    """Measure how many test positive targets are reachable from the train item pool."""
+    train_item_set = set(int(item_id) for item_id in train_item_ids)
+    test_item_ids = [int(item_id) for item_id in test_data["video_id"]]
+    positive_mask = build_recall_positive_mask(test_data)
+
+    positive_events = [
+        (int(user_id), int(item_id))
+        for user_id, item_id, is_positive in zip(
+            test_data["user_id"], test_item_ids, positive_mask
+        )
+        if is_positive
+    ]
+    positive_items = {item_id for _, item_id in positive_events}
+    positive_user_items = set(positive_events)
+
+    overlap_events = sum(1 for _, item_id in positive_events if item_id in train_item_set)
+    overlap_items = len(positive_items & train_item_set)
+    overlap_user_items = sum(
+        1 for _, item_id in positive_user_items if item_id in train_item_set
+    )
+
+    total_events = len(positive_events)
+    total_items = len(positive_items)
+    total_user_items = len(positive_user_items)
+
+    def ratio(count, total):
+        return count / total if total else 0.0
+
+    return {
+        "train_unique_items": len(train_item_set),
+        "test_unique_items": len(set(test_item_ids)),
+        "test_positive_events": total_events,
+        "test_positive_unique_items": total_items,
+        "test_positive_user_items": total_user_items,
+        "overlap_positive_events": overlap_events,
+        "non_overlap_positive_events": total_events - overlap_events,
+        "overlap_positive_event_rate": ratio(overlap_events, total_events),
+        "non_overlap_positive_event_rate": ratio(total_events - overlap_events, total_events),
+        "overlap_positive_unique_items": overlap_items,
+        "non_overlap_positive_unique_items": total_items - overlap_items,
+        "overlap_positive_unique_item_rate": ratio(overlap_items, total_items),
+        "non_overlap_positive_unique_item_rate": ratio(total_items - overlap_items, total_items),
+        "overlap_positive_user_items": overlap_user_items,
+        "non_overlap_positive_user_items": total_user_items - overlap_user_items,
+        "overlap_positive_user_item_rate": ratio(overlap_user_items, total_user_items),
+        "non_overlap_positive_user_item_rate": ratio(
+            total_user_items - overlap_user_items, total_user_items
+        ),
+    }
+
+
 def compute_channel_overlap(channel_results, top_k=100):
     """Return pairwise user-averaged overlap rates between recall channels."""
     channels = list(channel_results.keys())
