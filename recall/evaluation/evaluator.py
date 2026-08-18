@@ -7,14 +7,27 @@ from recall.data.labels import build_recall_positive_mask
 from recall.data.feature_column import RECALL_ITEM_FEATURES, RECALL_USER_FEATURES
 
 
-def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100]):
+def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100], candidate_item_ids=None):
     user_ids = test_data["user_id"]
     video_ids = test_data["video_id"]
     positive_mask = build_recall_positive_mask(test_data)
+    candidate_item_set = (
+        set(int(item_id) for item_id in candidate_item_ids)
+        if candidate_item_ids is not None
+        else None
+    )
 
     user_pos_items = {}
+    total_positive_events = 0
+    evaluated_positive_events = 0
+    filtered_unseen_positive_events = 0
     for user_id, video_id, is_positive in zip(user_ids, video_ids, positive_mask):
         if is_positive:
+            total_positive_events += 1
+            if candidate_item_set is not None and int(video_id) not in candidate_item_set:
+                filtered_unseen_positive_events += 1
+                continue
+            evaluated_positive_events += 1
             if user_id not in user_pos_items:
                 user_pos_items[user_id] = set()
             user_pos_items[user_id].add(int(video_id))
@@ -52,14 +65,25 @@ def evaluate_recall(recall_results, test_data, top_k_list=[10, 50, 100]):
             if candidate_counts else 0.0
         )
 
+    metrics["EvalPositiveEvents"] = evaluated_positive_events
+    metrics["TotalPositiveEvents"] = total_positive_events
+    metrics["FilteredUnseenPositiveEvents"] = filtered_unseen_positive_events
+    metrics["FilteredUnseenPositiveEventRate"] = (
+        filtered_unseen_positive_events / total_positive_events
+        if total_positive_events > 0
+        else 0.0
+    )
+
     return metrics
 
 
-def evaluate_recall_channels(channel_results, test_data, top_k=100):
+def evaluate_recall_channels(channel_results, test_data, top_k=100, candidate_item_ids=None):
     """Evaluate each recall channel and its overlap against the fused candidates."""
     channel_metrics = {}
     for channel, results in channel_results.items():
-        channel_metrics[channel] = evaluate_recall(results, test_data, [top_k])
+        channel_metrics[channel] = evaluate_recall(
+            results, test_data, [top_k], candidate_item_ids=candidate_item_ids
+        )
     return channel_metrics
 
 

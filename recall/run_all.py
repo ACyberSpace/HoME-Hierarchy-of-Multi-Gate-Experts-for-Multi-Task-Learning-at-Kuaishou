@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument("--candidates_path", type=str, default="checkpoints/recall/all_recall_candidates.pkl")
     parser.add_argument("--channel_cache_dir", type=str, default="checkpoints/recall/channel_candidates")
     parser.add_argument("--force_recall", action="store_true")
+    parser.add_argument("--eval_seen_only", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -159,7 +160,8 @@ def run_or_load_channel(
         )
         print(f"[{channel}] candidates saved: {cache_path}")
 
-    metrics = evaluate_recall(results, test_data, [args.top_k])
+    eval_item_ids = all_item_ids if args.eval_seen_only else None
+    metrics = evaluate_recall(results, test_data, [args.top_k], candidate_item_ids=eval_item_ids)
     elapsed = time.time() - channel_start
     print(f"[{channel}] {metrics}")
     return results, metrics, elapsed, str(cache_path)
@@ -228,10 +230,15 @@ def main():
         test_user_ids,
         top_k=args.top_k,
     )
-    fused_metrics = evaluate_recall(fused_results, test_data, [args.top_k])
+    eval_item_ids = all_item_ids if args.eval_seen_only else None
+    fused_metrics = evaluate_recall(
+        fused_results, test_data, [args.top_k], candidate_item_ids=eval_item_ids
+    )
     overlap = compute_channel_overlap(channel_results, top_k=args.top_k)
 
-    channel_metrics = evaluate_recall_channels(channel_results, test_data, top_k=args.top_k)
+    channel_metrics = evaluate_recall_channels(
+        channel_results, test_data, top_k=args.top_k, candidate_item_ids=eval_item_ids
+    )
 
     output = {
         "config": {
@@ -250,6 +257,7 @@ def main():
             "item_batch_size": args.item_batch_size,
             "channel_cache_dir": str(channel_cache_dir),
             "force_recall": args.force_recall,
+            "eval_seen_only": args.eval_seen_only,
             "swing_alpha1": args.swing_alpha1,
             "swing_alpha2": args.swing_alpha2,
             "swing_beta": args.swing_beta,
