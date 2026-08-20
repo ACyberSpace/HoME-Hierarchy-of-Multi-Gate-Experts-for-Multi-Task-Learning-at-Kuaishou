@@ -173,18 +173,20 @@ def compute_session_id(
     return pd.Series(session_ids.to_numpy(), index=df_processed["_position"]).sort_index()
 
 
-def preprocess(input_path: Path, output_path: Path, test_date: str = "20220508", train_days: int = 0) -> dict:
+def preprocess(
+    input_path: Path,
+    output_path: Path,
+    test_date: str = "20220508",
+    train_days: int = 0,
+    log_file: str = "log_standard_4_22_to_5_08_1k.csv",
+) -> dict:
     print("加载数据...")
 
-    log_df = pd.read_csv(input_path / "data" / "log_standard_4_22_to_5_08_1k.csv")
-    user_features = pd.read_csv(input_path / "data" / "user_features_1k.csv")
-    video_features_basic = pd.read_csv(
-        input_path / "data" / "video_features_basic_1k.csv"
-    )
-    video_upload_info = None
-    if "upload_dt" in video_features_basic.columns:
-        video_upload_info = video_features_basic[["video_id", "upload_dt"]].copy()
-
+    log_path = input_path / "data" / log_file
+    if not log_path.exists():
+        raise FileNotFoundError(f"Log file not found: {log_path}")
+    print(f"Using log file: {log_path}")
+    log_df = pd.read_csv(log_path)
     select_log_columns = [
         "user_id",
         "video_id",
@@ -199,7 +201,19 @@ def preprocess(input_path: Path, output_path: Path, test_date: str = "20220508",
         "long_view",
         "tab",
     ]
-    new_log_df = log_df[select_log_columns]
+    new_log_df = log_df[select_log_columns].copy()
+    log_video_ids = set(new_log_df["video_id"].unique())
+
+    user_features = pd.read_csv(input_path / "data" / "user_features_1k.csv")
+    video_features_basic = pd.read_csv(
+        input_path / "data" / "video_features_basic_1k.csv"
+    )
+    video_features_basic = video_features_basic[
+        video_features_basic["video_id"].isin(log_video_ids)
+    ].copy()
+    video_upload_info = None
+    if "upload_dt" in video_features_basic.columns:
+        video_upload_info = video_features_basic[["video_id", "upload_dt"]].copy()
 
     print("处理用户特征...")
     user_sparse_feature_columns = [
@@ -212,7 +226,7 @@ def preprocess(input_path: Path, output_path: Path, test_date: str = "20220508",
         "friend_user_num_range",
         "register_days_range",
     ]
-    new_user_feature_df = user_features[user_sparse_feature_columns]
+    new_user_feature_df = user_features[user_sparse_feature_columns].copy()
 
     new_user_feature_df["is_live_streamer"] = new_user_feature_df[
         "is_live_streamer"
@@ -250,7 +264,7 @@ def preprocess(input_path: Path, output_path: Path, test_date: str = "20220508",
 
     new_video_features_basic_df = video_features_basic[
         select_video_basic_feature_columns
-    ]
+    ].copy()
 
     for feat_name in ["visible_status", "music_type"]:
         max_val = new_video_features_basic_df[feat_name].max()
@@ -462,6 +476,10 @@ def preprocess(input_path: Path, output_path: Path, test_date: str = "20220508",
 
     joblib.dump(train_eval_dict, save_path, compress=3)
     preprocess_metadata = {
+        "source": {
+            "input_path": str(input_path),
+            "log_file": log_file,
+        },
         "split": {
             "test_date": test_date_dt.strftime("%Y%m%d"),
             "train_days": int(train_days) if train_days else 0,
@@ -587,6 +605,7 @@ if __name__ == '__main__':
     parser.add_argument("--output_path", type=str, default="./data")
     parser.add_argument("--test_date", type=str, default="20220508")
     parser.add_argument("--train_days", type=int, default=0, help="Use only this many days before test_date for training; 0 means all previous days.")
+    parser.add_argument("--log_file", type=str, default="log_standard_4_22_to_5_08_1k.csv")
     args = parser.parse_args()
 
-    preprocess(Path(args.input_path), Path(args.output_path), args.test_date, args.train_days)
+    preprocess(Path(args.input_path), Path(args.output_path), args.test_date, args.train_days, args.log_file)
