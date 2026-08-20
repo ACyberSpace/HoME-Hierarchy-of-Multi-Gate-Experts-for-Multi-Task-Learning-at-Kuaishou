@@ -74,6 +74,16 @@ def parse_args():
     parser.add_argument("--eges_max_user_items", type=int, default=50)
     parser.add_argument("--eges_min_count", type=int, default=1)
     parser.add_argument("--hotfresh_half_life_days", type=float, default=3.0)
+    parser.add_argument("--youtubednn_hidden_dims", type=str, default="128,64")
+    parser.add_argument("--youtubednn_dropout", type=float, default=0.0)
+    parser.add_argument("--dssm_user_hidden_dims", type=str, default="")
+    parser.add_argument("--dssm_item_hidden_dims", type=str, default="")
+    parser.add_argument("--dssm_dropout", type=float, default=0.0)
+    parser.add_argument("--sdm_num_heads", type=int, default=4)
+    parser.add_argument("--sdm_lstm_layers", type=int, default=1)
+    parser.add_argument("--sdm_dropout", type=float, default=0.0)
+    parser.add_argument("--sdm_item_hidden_dims", type=str, default="")
+    parser.add_argument("--sasrec_max_seq_len", type=int, default=200)
     parser.add_argument("--sasrec_num_heads", type=int, default=2)
     parser.add_argument("--sasrec_num_layers", type=int, default=2)
     parser.add_argument("--sasrec_dropout", type=float, default=0.2)
@@ -89,6 +99,17 @@ def parse_args():
     parser.add_argument("--fusion_mode", choices=["rank", "union"], default="rank")
     parser.add_argument("--fusion_top_k", type=int, default=None)
     return parser.parse_args()
+
+
+def parse_int_list(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(x) for x in value]
+    value = str(value).strip()
+    if not value:
+        return None
+    return [int(part.strip()) for part in value.split(",") if part.strip()]
 
 
 def order_channels(channels):
@@ -207,6 +228,16 @@ def build_base_config(args, feature_dims, model_type):
         "eges_max_user_items": args.eges_max_user_items,
         "eges_min_count": args.eges_min_count,
         "hotfresh_half_life_days": args.hotfresh_half_life_days,
+        "youtubednn_hidden_dims": parse_int_list(args.youtubednn_hidden_dims) or [128, 64],
+        "youtubednn_dropout": args.youtubednn_dropout,
+        "dssm_user_hidden_dims": parse_int_list(args.dssm_user_hidden_dims),
+        "dssm_item_hidden_dims": parse_int_list(args.dssm_item_hidden_dims),
+        "dssm_dropout": args.dssm_dropout,
+        "sdm_num_heads": args.sdm_num_heads,
+        "sdm_lstm_layers": args.sdm_lstm_layers,
+        "sdm_dropout": args.sdm_dropout,
+        "sdm_item_hidden_dims": parse_int_list(args.sdm_item_hidden_dims),
+        "sasrec_max_seq_len": args.sasrec_max_seq_len,
         "sasrec_num_heads": args.sasrec_num_heads,
         "sasrec_num_layers": args.sasrec_num_layers,
         "sasrec_dropout": args.sasrec_dropout,
@@ -230,6 +261,7 @@ def run_or_load_channel(
 ):
     cache_path = get_channel_cache_path(cache_dir, channel, args.top_k)
     channel_start = time.time()
+    config = build_base_config(args, feature_dims, channel)
 
     print("=" * 80)
     print(f"Recall channel: {channel}")
@@ -238,17 +270,17 @@ def run_or_load_channel(
     if cache_path.exists() and not args.force_recall:
         cached = joblib.load(cache_path)
         cache_signature = cached.get("data_signature") if isinstance(cached, dict) else None
-        if cache_signature == data_signature:
+        cache_config = cached.get("config") if isinstance(cached, dict) else None
+        if cache_signature == data_signature and cache_config == config:
             print(f"[{channel}] cache found, skip training and generation: {cache_path}")
             results = cached["results"] if isinstance(cached, dict) and "results" in cached else cached
         else:
-            print(f"[{channel}] cache exists but data signature changed, rerun: {cache_path}")
+            print(f"[{channel}] cache exists but data/config signature changed, rerun: {cache_path}")
             cached = None
     else:
         cached = None
 
     if cached is None:
-        config = build_base_config(args, feature_dims, channel)
         manager = RecallManager(config)
         manager.train(train_data, user_sequences, video_info)
         results = manager.generate_candidates(user_sequences, all_item_ids, top_k=args.top_k)
@@ -389,6 +421,16 @@ def main():
             "eges_max_user_items": args.eges_max_user_items,
             "eges_min_count": args.eges_min_count,
             "hotfresh_half_life_days": args.hotfresh_half_life_days,
+            "youtubednn_hidden_dims": parse_int_list(args.youtubednn_hidden_dims) or [128, 64],
+            "youtubednn_dropout": args.youtubednn_dropout,
+            "dssm_user_hidden_dims": parse_int_list(args.dssm_user_hidden_dims),
+            "dssm_item_hidden_dims": parse_int_list(args.dssm_item_hidden_dims),
+            "dssm_dropout": args.dssm_dropout,
+            "sdm_num_heads": args.sdm_num_heads,
+            "sdm_lstm_layers": args.sdm_lstm_layers,
+            "sdm_dropout": args.sdm_dropout,
+            "sdm_item_hidden_dims": parse_int_list(args.sdm_item_hidden_dims),
+            "sasrec_max_seq_len": args.sasrec_max_seq_len,
             "sasrec_num_heads": args.sasrec_num_heads,
             "sasrec_num_layers": args.sasrec_num_layers,
             "sasrec_dropout": args.sasrec_dropout,

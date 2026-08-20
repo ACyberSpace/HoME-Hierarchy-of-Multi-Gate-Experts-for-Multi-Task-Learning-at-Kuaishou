@@ -3,8 +3,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _make_mlp(input_dim, hidden_dims, output_dim, dropout=0.0):
+    layers = []
+    for hidden_dim in hidden_dims:
+        layers.append(nn.Linear(input_dim, hidden_dim))
+        layers.append(nn.ReLU())
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        input_dim = hidden_dim
+    layers.append(nn.Linear(input_dim, output_dim))
+    return nn.Sequential(*layers)
+
+
 class SDM(nn.Module):
-    def __init__(self, user_feature_dims: dict, item_feature_dims: dict, embedding_dim: int = 64, num_heads: int = 4):
+    def __init__(
+        self,
+        user_feature_dims: dict,
+        item_feature_dims: dict,
+        embedding_dim: int = 64,
+        num_heads: int = 4,
+        lstm_layers: int = 1,
+        dropout: float = 0.0,
+        item_hidden_dims=None,
+    ):
         super(SDM, self).__init__()
         self.user_feature_dims = user_feature_dims
         self.item_feature_dims = item_feature_dims
@@ -19,14 +40,23 @@ class SDM(nn.Module):
         for feat_name, dim in user_feature_dims.items():
             self.user_embedding[feat_name] = nn.Embedding(dim, embedding_dim)
 
-        self.short_lstm = nn.LSTM(embedding_dim, embedding_dim, batch_first=True, bidirectional=True)
-        self.short_attention = nn.MultiheadAttention(embedding_dim * 2, num_heads, batch_first=True)
+        recurrent_dropout = dropout if lstm_layers > 1 else 0.0
+        self.short_lstm = nn.LSTM(
+            embedding_dim,
+            embedding_dim,
+            num_layers=lstm_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=recurrent_dropout,
+        )
+        self.short_attention = nn.MultiheadAttention(embedding_dim * 2, num_heads, dropout=dropout, batch_first=True)
         self.short_proj = nn.Linear(embedding_dim * 2, embedding_dim)
 
-        self.long_attention = nn.MultiheadAttention(embedding_dim, num_heads, batch_first=True)
+        self.long_attention = nn.MultiheadAttention(embedding_dim, num_heads, dropout=dropout, batch_first=True)
         self.user_tower = nn.Sequential(
             nn.Linear(embedding_dim * len(user_feature_dims), embedding_dim),
             nn.ReLU(),
+            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
         )
 
         self.gate_layer = nn.Sequential(
@@ -34,10 +64,11 @@ class SDM(nn.Module):
             nn.Sigmoid(),
         )
 
-        self.item_tower = nn.Sequential(
-            nn.Linear(embedding_dim * len(item_feature_dims), embedding_dim * 2),
-            nn.ReLU(),
-            nn.Linear(embedding_dim * 2, embedding_dim),
+        self.item_tower = _make_mlp(
+            embedding_dim * len(item_feature_dims),
+            item_hidden_dims or [embedding_dim * 2],
+            embedding_dim,
+            dropout,
         )
 
     def forward(self, user_features, item_features):
@@ -130,6 +161,9 @@ def build_sdm_model(config: dict, user_feature_dims: dict, item_feature_dims: di
         user_feature_dims=user_feature_dims,
         item_feature_dims=item_feature_dims,
         embedding_dim=config.get("embedding_dim", 64),
-        num_heads=config.get("num_heads", 4),
+        num_heads=config.get("sdm_num_heads", config.get("num_heads", 4)),
+        lstm_layers=config.get("sdm_lstm_layers", 1),
+        dropout=config.get("sdm_dropout", 0.0),
+        item_hidden_dims=config.get("sdm_item_hidden_dims"),
     )
     return model

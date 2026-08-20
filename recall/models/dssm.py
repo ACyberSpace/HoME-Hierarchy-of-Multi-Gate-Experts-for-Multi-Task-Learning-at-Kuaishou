@@ -3,12 +3,35 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _make_mlp(input_dim, hidden_dims, output_dim, dropout=0.0):
+    layers = []
+    for hidden_dim in hidden_dims:
+        layers.append(nn.Linear(input_dim, hidden_dim))
+        layers.append(nn.ReLU())
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        input_dim = hidden_dim
+    layers.append(nn.Linear(input_dim, output_dim))
+    layers.append(nn.ReLU())
+    return nn.Sequential(*layers)
+
+
 class DSSM(nn.Module):
-    def __init__(self, user_feature_dims: dict, item_feature_dims: dict, embedding_dim: int = 64):
+    def __init__(
+        self,
+        user_feature_dims: dict,
+        item_feature_dims: dict,
+        embedding_dim: int = 64,
+        user_hidden_dims=None,
+        item_hidden_dims=None,
+        dropout: float = 0.0,
+    ):
         super(DSSM, self).__init__()
         self.user_feature_dims = user_feature_dims
         self.item_feature_dims = item_feature_dims
         self.embedding_dim = embedding_dim
+        user_hidden_dims = user_hidden_dims or [embedding_dim * 2]
+        item_hidden_dims = item_hidden_dims or [embedding_dim * 2]
 
         self.user_embedding = nn.ModuleDict()
         for feat_name, dim in user_feature_dims.items():
@@ -18,18 +41,17 @@ class DSSM(nn.Module):
         for feat_name, dim in item_feature_dims.items():
             self.item_embedding[feat_name] = nn.Embedding(dim, embedding_dim)
 
-        self.user_tower = nn.Sequential(
-            nn.Linear(embedding_dim * len(user_feature_dims), embedding_dim * 2),
-            nn.ReLU(),
-            nn.Linear(embedding_dim * 2, embedding_dim),
-            nn.ReLU(),
+        self.user_tower = _make_mlp(
+            embedding_dim * len(user_feature_dims),
+            user_hidden_dims,
+            embedding_dim,
+            dropout,
         )
-
-        self.item_tower = nn.Sequential(
-            nn.Linear(embedding_dim * len(item_feature_dims), embedding_dim * 2),
-            nn.ReLU(),
-            nn.Linear(embedding_dim * 2, embedding_dim),
-            nn.ReLU(),
+        self.item_tower = _make_mlp(
+            embedding_dim * len(item_feature_dims),
+            item_hidden_dims,
+            embedding_dim,
+            dropout,
         )
 
     def forward(self, user_features, item_features):
@@ -84,5 +106,8 @@ def build_dssm_model(config: dict, user_feature_dims: dict, item_feature_dims: d
         user_feature_dims=user_feature_dims,
         item_feature_dims=item_feature_dims,
         embedding_dim=config.get("embedding_dim", 64),
+        user_hidden_dims=config.get("dssm_user_hidden_dims"),
+        item_hidden_dims=config.get("dssm_item_hidden_dims"),
+        dropout=config.get("dssm_dropout", 0.0),
     )
     return model

@@ -4,7 +4,14 @@ import torch.nn.functional as F
 
 
 class YouTubeDNN(nn.Module):
-    def __init__(self, user_feature_dims: dict, item_vocab_size: int, embedding_dim: int = 64, hidden_dims=None):
+    def __init__(
+        self,
+        user_feature_dims: dict,
+        item_vocab_size: int,
+        embedding_dim: int = 64,
+        hidden_dims=None,
+        dropout: float = 0.0,
+    ):
         super().__init__()
         self.user_feature_dims = user_feature_dims
         self.item_vocab_size = int(item_vocab_size)
@@ -20,6 +27,8 @@ class YouTubeDNN(nn.Module):
         layers = []
         for hidden_dim in self.hidden_dims:
             layers.extend([nn.Linear(input_dim, hidden_dim), nn.ReLU()])
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
             input_dim = hidden_dim
         layers.append(nn.Linear(input_dim, self.embedding_dim))
         self.user_tower = nn.Sequential(*layers)
@@ -56,4 +65,5 @@ def build_youtubednn_model(config: dict, user_feature_dims: dict, item_feature_d
         item_vocab_size=item_feature_dims.get("video_id", 1),
         embedding_dim=config.get("embedding_dim", 64),
         hidden_dims=config.get("youtubednn_hidden_dims", [128, 64]),
+        dropout=config.get("youtubednn_dropout", 0.0),
     )
