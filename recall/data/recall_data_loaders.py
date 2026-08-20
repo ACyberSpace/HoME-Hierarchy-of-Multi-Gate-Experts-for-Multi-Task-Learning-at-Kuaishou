@@ -186,7 +186,7 @@ def build_dataloader(model_type: str, train_data: Dict, item_feature_dims: Dict,
         dataset = DSSMDataset(train_data, item_feature_dims, num_negatives=num_negatives)
     elif model_type == 'mind':
         dataset = MINDDataset(train_data, item_feature_dims)
-    elif model_type == 'sdm':
+    elif model_type in ('sdm', 'sasrec'):
         dataset = SDMDataset(train_data, item_feature_dims)
     else:
         raise ValueError(f"Unsupported model type: {model_type}")

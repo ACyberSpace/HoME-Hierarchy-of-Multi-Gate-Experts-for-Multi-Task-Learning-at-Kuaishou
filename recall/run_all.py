@@ -24,6 +24,7 @@ ALL_CHANNELS = [
     "hotfresh",
     "eges",
     "youtubednn",
+    "sasrec",
     "sdm",
     "dssm",
     "popularity",
@@ -36,6 +37,7 @@ CHANNEL_RUN_ORDER = [
     "hotfresh",
     "eges",
     "youtubednn",
+    "sasrec",
     "sdm",
     "dssm",
     "popularity",
@@ -44,7 +46,7 @@ CHANNEL_RUN_ORDER = [
     "swing",
     "mind",
 ]
-DEFAULT_CHANNELS = ["hotfresh", "eges", "youtubednn", "sdm"]
+DEFAULT_CHANNELS = ["hotfresh", "eges", "youtubednn", "sasrec"]
 
 
 def parse_args():
@@ -72,6 +74,9 @@ def parse_args():
     parser.add_argument("--eges_max_user_items", type=int, default=50)
     parser.add_argument("--eges_min_count", type=int, default=1)
     parser.add_argument("--hotfresh_half_life_days", type=float, default=3.0)
+    parser.add_argument("--sasrec_num_heads", type=int, default=2)
+    parser.add_argument("--sasrec_num_layers", type=int, default=2)
+    parser.add_argument("--sasrec_dropout", type=float, default=0.2)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--candidate_batch_size", type=int, default=32)
     parser.add_argument("--item_batch_size", type=int, default=50000)
@@ -81,6 +86,8 @@ def parse_args():
     parser.add_argument("--channel_cache_dir", type=str, default="checkpoints/recall/channel_candidates")
     parser.add_argument("--force_recall", action="store_true")
     parser.add_argument("--eval_seen_only", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fusion_mode", choices=["rank", "union"], default="rank")
+    parser.add_argument("--fusion_top_k", type=int, default=None)
     return parser.parse_args()
 
 
@@ -106,6 +113,47 @@ def build_data_signature(data_dir, train_data, test_data):
         "train_items": int(len(set(int(item_id) for item_id in train_data["video_id"]))),
         "metadata": metadata,
     }
+
+
+def fuse_by_union(channel_results, channels, user_ids, top_k):
+    fused_results = {}
+    metadata = {}
+
+    for user_id in user_ids:
+        selected = []
+        selected_set = set()
+        user_metadata = {}
+        for channel in channels:
+            for rank, item_id in enumerate(channel_results[channel].get(user_id, []), start=1):
+                item_id = int(item_id)
+                if item_id not in user_metadata:
+                    user_metadata[item_id] = {
+                        "sources": [],
+                        "channel_ranks": {},
+                        "fusion_mode": "union",
+                    }
+                user_metadata[item_id]["sources"].append(channel)
+                user_metadata[item_id]["channel_ranks"][channel] = rank
+                if item_id not in selected_set:
+                    selected.append(item_id)
+                    selected_set.add(item_id)
+                if len(selected) >= top_k:
+                    break
+            if len(selected) >= top_k:
+                break
+
+        for item_meta in user_metadata.values():
+            item_meta["sources"] = sorted(set(item_meta["sources"]))
+            item_meta["hit_count"] = len(item_meta["sources"])
+
+        fused_results[user_id] = selected
+        metadata[user_id] = {
+            item_id: user_metadata[item_id]
+            for item_id in selected
+            if item_id in user_metadata
+        }
+
+    return fused_results, metadata
 
 
 def build_base_config(args, feature_dims, model_type):
@@ -159,6 +207,9 @@ def build_base_config(args, feature_dims, model_type):
         "eges_max_user_items": args.eges_max_user_items,
         "eges_min_count": args.eges_min_count,
         "hotfresh_half_life_days": args.hotfresh_half_life_days,
+        "sasrec_num_heads": args.sasrec_num_heads,
+        "sasrec_num_layers": args.sasrec_num_layers,
+        "sasrec_dropout": args.sasrec_dropout,
         "workers": args.workers,
         "candidate_batch_size": args.candidate_batch_size,
         "item_batch_size": args.item_batch_size,
@@ -226,6 +277,7 @@ def main():
     start_time = time.time()
     data_dir = Path(args.data_dir)
     channels = order_channels(args.channels)
+    fusion_top_k = args.fusion_top_k if args.fusion_top_k is not None else args.top_k
     channel_cache_dir = Path(args.channel_cache_dir)
     channel_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -273,6 +325,8 @@ def main():
         "weights": {channel: 1.0 for channel in channels},
         "rank_base": args.rank_base,
         "min_quota_per_channel": {channel: args.min_quota for channel in channels},
+        "fusion_mode": args.fusion_mode,
+        "fusion_top_k": fusion_top_k,
     }
     pipeline = FullPipeline(
         data_path=str(data_dir),
@@ -281,14 +335,21 @@ def main():
         recall_fusion_config=fusion_config,
     )
     test_user_ids = list(set(test_data["user_id"]))
-    fused_results = pipeline._fuse_recall_results(
-        [(channel, channel_results[channel]) for channel in channels],
-        test_user_ids,
-        top_k=args.top_k,
-    )
+    if args.fusion_mode == "union":
+        fused_results, fusion_metadata = fuse_by_union(
+            channel_results, channels, test_user_ids, top_k=fusion_top_k
+        )
+        pipeline.last_recall_fusion_metadata = fusion_metadata
+    else:
+        fused_results = pipeline._fuse_recall_results(
+            [(channel, channel_results[channel]) for channel in channels],
+            test_user_ids,
+            top_k=fusion_top_k,
+        )
     eval_item_ids = all_item_ids if args.eval_seen_only else None
+    fused_top_k_list = sorted(set([args.top_k, fusion_top_k]))
     fused_metrics = evaluate_recall(
-        fused_results, test_data, [args.top_k], candidate_item_ids=eval_item_ids
+        fused_results, test_data, fused_top_k_list, candidate_item_ids=eval_item_ids
     )
     overlap = compute_channel_overlap(channel_results, top_k=args.top_k)
 
@@ -308,6 +369,8 @@ def main():
             "num_negatives": args.num_negatives,
             "softmax_temperature": args.softmax_temperature,
             "top_k": args.top_k,
+            "fusion_mode": args.fusion_mode,
+            "fusion_top_k": fusion_top_k,
             "workers": args.workers,
             "candidate_batch_size": args.candidate_batch_size,
             "item_batch_size": args.item_batch_size,
@@ -326,6 +389,9 @@ def main():
             "eges_max_user_items": args.eges_max_user_items,
             "eges_min_count": args.eges_min_count,
             "hotfresh_half_life_days": args.hotfresh_half_life_days,
+            "sasrec_num_heads": args.sasrec_num_heads,
+            "sasrec_num_layers": args.sasrec_num_layers,
+            "sasrec_dropout": args.sasrec_dropout,
             "fusion": fusion_config,
         },
         "channel_metrics": channel_metrics,

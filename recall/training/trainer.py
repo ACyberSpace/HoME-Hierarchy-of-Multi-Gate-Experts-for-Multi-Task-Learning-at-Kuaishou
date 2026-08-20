@@ -10,6 +10,7 @@ from recall.models.dssm import DSSM
 from recall.models.mind import MIND
 from recall.models.sdm import SDM
 from recall.models.youtubednn import YouTubeDNN
+from recall.models.sasrec import SASRec
 
 
 def train_swing(model, data_loader):
@@ -59,6 +60,10 @@ def train_dssm(model, dataloader, epochs=5, lr=0.001, temperature=0.05):
 
 def train_youtubednn(model, dataloader, epochs=5, lr=0.001, temperature=0.05):
     train_dssm(model, dataloader, epochs=epochs, lr=lr, temperature=temperature)
+
+
+def train_sasrec(model, dataloader, epochs=5, lr=0.001, temperature=0.05):
+    train_sdm(model, dataloader, epochs=epochs, lr=lr, temperature=temperature)
 
 
 def train_mind(model, dataloader, epochs=5, lr=0.001):
@@ -133,6 +138,14 @@ def train_model(model_type: str, model, data_loader, config: dict):
         train_mind(model, data_loader, epochs=config.get("epochs", 5), lr=config.get("lr", 0.001))
     elif model_type == 'sdm':
         train_sdm(
+            model,
+            data_loader,
+            epochs=config.get("epochs", 5),
+            lr=config.get("lr", 0.001),
+            temperature=config.get("softmax_temperature", 0.05),
+        )
+    elif model_type == 'sasrec':
+        train_sasrec(
             model,
             data_loader,
             epochs=config.get("epochs", 5),

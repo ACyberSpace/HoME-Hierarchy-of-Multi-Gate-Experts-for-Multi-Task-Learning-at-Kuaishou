@@ -12,6 +12,7 @@ from .models.popularity import build_popularity_model
 from .models.hotfresh import build_hotfresh_model
 from .models.eges import build_eges_model
 from .models.youtubednn import build_youtubednn_model
+from .models.sasrec import build_sasrec_model
 from .data.recall_data_loaders import (
     SwingDataLoader,
     Item2VecDataLoader,
@@ -113,6 +114,12 @@ class RecallManager:
             train_model('sdm', model, dataloader, self.config)
             self.models['sdm'] = model
 
+        elif self.model_type == 'sasrec':
+            dataloader = build_dataloader('sasrec', train_data, self.item_feature_dims, batch_size=self.config.get("batch_size", 256))
+            model = build_sasrec_model(self.config, self.item_feature_dims)
+            train_model('sasrec', model, dataloader, self.config)
+            self.models['sasrec'] = model
+
         elif self.model_type == 'freshness':
             if video_info is not None:
                 model = build_freshness_model(self.config, video_info)
@@ -204,6 +211,18 @@ class RecallManager:
                 self.config.get("item_batch_size", 50000),
             )
 
+        elif 'sasrec' in self.models:
+            recall_results = generate_recall_candidates_sdm(
+                self.models['sasrec'],
+                user_sequences,
+                all_item_ids,
+                self.item_feature_index,
+                self.user_feature_index,
+                top_k,
+                self.config.get("candidate_batch_size", 32),
+                self.config.get("item_batch_size", 50000),
+            )
+
         elif 'freshness' in self.models:
             model = self.models['freshness']
             iterator = tqdm(user_sequences['user_id'], desc="生成 freshness 召回候选")
@@ -246,12 +265,12 @@ class RecallManager:
         return evaluate_recall(recall_results, test_data)
 
     def save_model(self, path: str):
-        if self.model_type in ['dssm', 'mind', 'sdm', 'youtubednn'] and self.model_type in self.models:
+        if self.model_type in ['dssm', 'mind', 'sdm', 'youtubednn', 'sasrec'] and self.model_type in self.models:
             torch.save(self.models[self.model_type].state_dict(), path)
             print(f"模型已保存到 {path}")
 
     def load_model(self, path: str):
-        if self.model_type in ['dssm', 'mind', 'sdm', 'youtubednn']:
+        if self.model_type in ['dssm', 'mind', 'sdm', 'youtubednn', 'sasrec']:
             if self.model_type == 'dssm':
                 model = build_dssm_model(self.config, self.user_feature_dims, self.item_feature_dims)
             elif self.model_type == 'mind':
@@ -260,6 +279,8 @@ class RecallManager:
                 model = build_sdm_model(self.config, self.user_feature_dims, self.item_feature_dims)
             elif self.model_type == 'youtubednn':
                 model = build_youtubednn_model(self.config, self.user_feature_dims, self.item_feature_dims)
+            elif self.model_type == 'sasrec':
+                model = build_sasrec_model(self.config, self.item_feature_dims)
             model.load_state_dict(torch.load(path, map_location='cpu'))
             self.models[self.model_type] = model
             print(f"模型已从 {path} 加载")

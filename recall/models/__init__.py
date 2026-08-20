@@ -7,3 +7,4 @@ from .freshness import FreshnessRecall, build_freshness_model
 from .hotfresh import HotFreshRecall, build_hotfresh_model
 from .eges import EGESRecall, build_eges_model
 from .youtubednn import YouTubeDNN, build_youtubednn_model
+from .sasrec import SASRec, build_sasrec_model
