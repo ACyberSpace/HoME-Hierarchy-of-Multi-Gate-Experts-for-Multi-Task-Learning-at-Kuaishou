@@ -1,7 +1,7 @@
 import pickle
 import argparse
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -173,7 +173,7 @@ def compute_session_id(
     return pd.Series(session_ids.to_numpy(), index=df_processed["_position"]).sort_index()
 
 
-def preprocess(input_path: Path, output_path: Path) -> dict:
+def preprocess(input_path: Path, output_path: Path, test_date: str = "20220508", train_days: int = 0) -> dict:
     print("加载数据...")
 
     log_df = pd.read_csv(input_path / "data" / "log_standard_4_22_to_5_08_1k.csv")
@@ -365,10 +365,23 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
 
     print("划分训练和测试集（按日期）...")
     df_merged["date"] = df_merged["date"].apply(lambda x: convert_date(x))
-    test_mask = df_merged["date"].dt.strftime('%Y%m%d') == '20220508'
-    train_mask = ~test_mask
+    test_date_dt = convert_date(int(test_date))
+    test_mask = df_merged["date"].dt.date == test_date_dt.date()
+    train_mask = df_merged["date"] < test_date_dt
+    if train_days and train_days > 0:
+        train_start_dt = test_date_dt - timedelta(days=train_days)
+        train_mask &= df_merged["date"] >= train_start_dt
+    else:
+        train_start_dt = None
     test_index = np.flatnonzero(test_mask.to_numpy())
     train_index = np.flatnonzero(train_mask.to_numpy())
+    print(
+        "Date split: "
+        f"train_start={train_start_dt.strftime('%Y%m%d') if train_start_dt else 'all_before_test'}, "
+        f"train_end={(test_date_dt - timedelta(days=1)).strftime('%Y%m%d')}, "
+        f"test_date={test_date_dt.strftime('%Y%m%d')}, "
+        f"train_rows={len(train_index)}, raw_test_rows={len(test_index)}"
+    )
 
     positive_columns = [
         "is_click",
@@ -450,6 +463,10 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
     joblib.dump(train_eval_dict, save_path, compress=3)
     preprocess_metadata = {
         "split": {
+            "test_date": test_date_dt.strftime("%Y%m%d"),
+            "train_days": int(train_days) if train_days else 0,
+            "train_start_date": train_start_dt.strftime("%Y%m%d") if train_start_dt else None,
+            "train_end_date": (test_date_dt - timedelta(days=1)).strftime("%Y%m%d"),
             "train_rows": int(len(train_index)),
             "raw_test_rows": raw_test_count,
             "filtered_test_rows": filtered_test_count,
@@ -457,6 +474,7 @@ def preprocess(input_path: Path, output_path: Path) -> dict:
             "raw_test_positive_events": raw_test_positive_count,
             "filtered_test_positive_events": filtered_test_positive_count,
             "test_filter": "drop test rows whose encoded video_id does not appear in train split",
+            "train_filter": "use rows before test_date" if not train_days else f"use the {int(train_days)} days before test_date",
         }
     }
     with open(output_path / "preprocess_metadata.json", "w", encoding="utf-8") as f:
@@ -567,6 +585,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Preprocess KuaiRand-1K for HoME.")
     parser.add_argument("--input_path", type=str, default="./KuaiRand-1K")
     parser.add_argument("--output_path", type=str, default="./data")
+    parser.add_argument("--test_date", type=str, default="20220508")
+    parser.add_argument("--train_days", type=int, default=0, help="Use only this many days before test_date for training; 0 means all previous days.")
     args = parser.parse_args()
 
-    preprocess(Path(args.input_path), Path(args.output_path))
+    preprocess(Path(args.input_path), Path(args.output_path), args.test_date, args.train_days)
