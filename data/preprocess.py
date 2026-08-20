@@ -38,8 +38,29 @@ def convert_date(date: int):
     return datetime(int(year), int(month), int(day))
 
 
-def compute_last_k_clicked_history(
-    df: pd.DataFrame, k: int = 20, pad_value: int = 0
+RECALL_POSITIVE_COLUMNS = [
+    "is_click",
+    "long_view",
+    "is_like",
+    "is_comment",
+    "is_forward",
+    "is_follow",
+]
+
+
+def build_positive_mask(df: pd.DataFrame, positive_columns=None) -> pd.Series:
+    positive_columns = positive_columns or RECALL_POSITIVE_COLUMNS
+    positive_mask = pd.Series(False, index=df.index)
+    for label in positive_columns:
+        if label in df.columns:
+            positive_mask |= df[label].astype(np.int8) == 1
+    if "is_hate" in df.columns:
+        positive_mask &= df["is_hate"].astype(np.int8) != 1
+    return positive_mask
+
+
+def compute_last_k_positive_history(
+    df: pd.DataFrame, k: int = 20, pad_value: int = 0, positive_columns=None
 ) -> pd.DataFrame:
     """
     计算每个用户在每个日期点击的最后k个视频id，基于当前日期之前的点击
@@ -55,10 +76,10 @@ def compute_last_k_clicked_history(
     """
     if not all(
         col in df.columns
-        for col in ["user_id", "video_id", "date", "time_ms", "is_click"]
+        for col in ["user_id", "video_id", "date", "time_ms"]
     ):
         raise ValueError(
-            "输入的DataFrame必须包含列: 'user_id', 'video_id', 'date', 'time_ms', 'is_click'"
+            "输入的DataFrame必须包含列: 'user_id', 'video_id', 'date', 'time_ms'"
         )
 
     if k <= 0:
@@ -67,13 +88,15 @@ def compute_last_k_clicked_history(
 
     df_processed = df.copy()
     df_processed["date"] = df_processed["date"].apply(lambda x: convert_date(x))
-    df_processed["is_click"] = df_processed["is_click"].astype(bool)
+    df_processed["_is_positive_history"] = build_positive_mask(
+        df_processed, positive_columns
+    )
     df_processed = df_processed.sort_values(
         by=["user_id", "date", "time_ms"], ascending=True
     )
     df_processed.reset_index(drop=True, inplace=True)
 
-    clicked_df = df_processed[df_processed["is_click"]].copy()
+    clicked_df = df_processed[df_processed["_is_positive_history"]].copy()
 
     if clicked_df.empty:
         print("Warning: No click interactions found in the data.")
@@ -128,7 +151,9 @@ def compute_last_k_clicked_history(
         lambda hist: pad_and_truncate(hist, k, pad_value)
     )
 
-    return df_processed.drop(columns=["prev_days_history", "propagated_history"])
+    return df_processed.drop(
+        columns=["prev_days_history", "propagated_history", "_is_positive_history"]
+    )
 
 
 def compute_session_id(
@@ -179,6 +204,8 @@ def preprocess(
     test_date: str = "20220508",
     train_days: int = 0,
     log_file: str = "log_standard_4_22_to_5_08_1k.csv",
+    short_seq_len: int = 50,
+    long_seq_len: int = 200,
 ) -> dict:
     print("加载数据...")
 
@@ -331,13 +358,23 @@ def preprocess(
     del df_merged["tab_encode"]
 
     print("计算序列特征...")
-    SHORT_LEN = 50
-    LONG_LEN = 200
+    SHORT_LEN = int(short_seq_len)
+    LONG_LEN = int(long_seq_len)
 
-    df_merged_with_long = compute_last_k_clicked_history(
-        df_merged[["user_id", "video_id", "date", "time_ms", "is_click"]].copy(),
+    history_columns = [
+        "user_id",
+        "video_id",
+        "date",
+        "time_ms",
+        *[label for label in RECALL_POSITIVE_COLUMNS if label in df_merged.columns],
+    ]
+    if "is_hate" in df_merged.columns:
+        history_columns.append("is_hate")
+    df_merged_with_long = compute_last_k_positive_history(
+        df_merged[history_columns].copy(),
         k=LONG_LEN,
         pad_value=0,
+        positive_columns=RECALL_POSITIVE_COLUMNS,
     )
     df_merged["long_seq"] = df_merged_with_long["last_k_clicked_items"].values
 
@@ -483,6 +520,9 @@ def preprocess(
         "split": {
             "test_date": test_date_dt.strftime("%Y%m%d"),
             "train_days": int(train_days) if train_days else 0,
+            "short_seq_len": SHORT_LEN,
+            "long_seq_len": LONG_LEN,
+            "history_behavior": "any recall-positive feedback excluding hate",
             "train_start_date": train_start_dt.strftime("%Y%m%d") if train_start_dt else None,
             "train_end_date": (test_date_dt - timedelta(days=1)).strftime("%Y%m%d"),
             "train_rows": int(len(train_index)),
@@ -505,13 +545,23 @@ def preprocess(
     def build_user_sequences(data: dict) -> dict:
         last_index_by_user = {}
         clicked_by_user = {}
+        positive_mask = build_positive_mask(
+            pd.DataFrame(
+                {
+                    label: data[label]
+                    for label in [*RECALL_POSITIVE_COLUMNS, "is_hate"]
+                    if label in data
+                }
+            ),
+            RECALL_POSITIVE_COLUMNS,
+        ).to_numpy()
 
-        for idx, (uid, vid, click) in enumerate(
-            zip(data["user_id"], data["video_id"], data["is_click"])
+        for idx, (uid, vid, is_positive) in enumerate(
+            zip(data["user_id"], data["video_id"], positive_mask)
         ):
             uid = int(uid)
             last_index_by_user[uid] = idx
-            if int(click) == 1:
+            if bool(is_positive):
                 clicked_by_user.setdefault(uid, [])
                 if int(vid) not in clicked_by_user[uid]:
                     clicked_by_user[uid].append(int(vid))
@@ -606,6 +656,16 @@ if __name__ == '__main__':
     parser.add_argument("--test_date", type=str, default="20220508")
     parser.add_argument("--train_days", type=int, default=0, help="Use only this many days before test_date for training; 0 means all previous days.")
     parser.add_argument("--log_file", type=str, default="log_standard_4_22_to_5_08_1k.csv")
+    parser.add_argument("--short_seq_len", type=int, default=50)
+    parser.add_argument("--long_seq_len", type=int, default=200)
     args = parser.parse_args()
 
-    preprocess(Path(args.input_path), Path(args.output_path), args.test_date, args.train_days, args.log_file)
+    preprocess(
+        Path(args.input_path),
+        Path(args.output_path),
+        args.test_date,
+        args.train_days,
+        args.log_file,
+        args.short_seq_len,
+        args.long_seq_len,
+    )
